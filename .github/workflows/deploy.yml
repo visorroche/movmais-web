@@ -1,4 +1,4 @@
-name: Deploy Web (datos.movmais.com)
+name: Deploy Web (dados.movmais.com)
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
       - main
       - master
 
-jobs:  
+jobs:
   deploy:
     runs-on: ubuntu-latest
     
@@ -21,14 +21,18 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           password: ${{ secrets.SERVER_PASSWORD }}
           script: |
-            cd /opt/movmais/apps/web
+            cd /opt/movmais/apps/movmais-web
             git fetch origin
             git reset --hard origin/main || git reset --hard origin/master
             cd /opt/movmais
             docker-compose -f docker-compose-apps.yml build --no-cache movmais-web
             docker-compose -f docker-compose-apps.yml up -d movmais-web
-            echo "✅ Deploy conclu�do!"
-  
+            echo "✅ Deploy de dados.movmais.com concluído!"
+      
       - name: Notify deployment
         if: success()
-        run: echo "🎯 Deploy de dados.movmais.com conclu’do!
+        run: echo "🚀 Deploy de dados.movmais.com realizado com sucesso!"
+      
+      - name: Notify failure
+        if: failure()
+        run: echo "❌ Falha no deploy de dados.movmais.com"
