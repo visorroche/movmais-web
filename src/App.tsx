@@ -3,6 +3,15 @@ import Login from "@/pages/Login";
 import Cadastro from "@/pages/Cadastro";
 import AreaLogada from "@/pages/AreaLogada";
 import Dashboard from "@/pages/Dashboard";
+import DashboardAoVivo from "@/pages/dashboard/AoVivo";
+import DashboardItens from "@/pages/dashboard/Itens";
+import DashboardSimulacoes from "@/pages/dashboard/Simulacoes";
+import Clientes from "@/pages/Clientes";
+import Pedidos from "@/pages/Pedidos";
+import Produtos from "@/pages/Produtos";
+import ConfigUsuarios from "@/pages/configuracoes/Usuarios";
+import ConfigEmpresa from "@/pages/configuracoes/Empresa";
+import ConfigPlataformas from "@/pages/configuracoes/Plataformas";
 import NotFound from "@/pages/NotFound";
 import { Toaster } from "@/components/ui/toaster";
 
@@ -17,6 +26,15 @@ const App = () => {
           <Route path="/cadastro" element={<Cadastro />} />
           <Route element={<AreaLogada />}>
             <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/dashboard/ao-vivo" element={<DashboardAoVivo />} />
+            <Route path="/dashboard/itens" element={<DashboardItens />} />
+            <Route path="/dashboard/simulacoes" element={<DashboardSimulacoes />} />
+            <Route path="/clientes" element={<Clientes />} />
+            <Route path="/pedidos" element={<Pedidos />} />
+            <Route path="/produtos" element={<Produtos />} />
+            <Route path="/configuracoes/usuarios" element={<ConfigUsuarios />} />
+            <Route path="/configuracoes/empresa" element={<ConfigEmpresa />} />
+            <Route path="/configuracoes/plataformas" element={<ConfigPlataformas />} />
           </Route>
           <Route path="*" element={<NotFound />} />
         </Routes>

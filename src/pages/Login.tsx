@@ -3,10 +3,10 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Link, useNavigate } from "react-router-dom";
 import { useState } from "react";
-import { login } from "@/lib/auth";
+import { ensureDefaultCompanySelected, login } from "@/lib/auth";
 import { useToast } from "@/components/ui/use-toast";
 import { Eye, EyeOff } from "lucide-react";
-import logo from "@/assets/logo.svg";
+import logo from "@/assets/logo.png";
 
 const Login = () => {
   const [form, setForm] = useState({ email: "", senha: "" });
@@ -16,13 +16,13 @@ const Login = () => {
   const { toast } = useToast();
 
   return (
-    <div className="min-h-screen w-full flex items-center justify-center bg-gradient-to-b from-slate-900 to-secondary p-6">
+    <div className="min-h-screen w-full flex items-center justify-center bg-[#fff8f2] p-6">
       <div className="w-full max-w-md">
         <div className="mb-6 flex justify-center">
-          <img src={logo} alt="MovMais" className="h-12 w-auto" />
+          <img src={logo} alt="MovMais" className="h-[100px] w-auto" />
         </div>
-        <Card className="p-8 rounded-2xl shadow-2xl bg-slate-950 border-slate-800">
-          <h2 className="text-3xl font-semibold text-slate-100 mb-6">Entrar</h2>
+        <Card className="p-8 rounded-2xl shadow-xl bg-white border-slate-200">
+          <h2 className="text-3xl font-semibold text-slate-900 mb-6">Entrar</h2>
           <form
             className="flex flex-col gap-4"
             onSubmit={async (e) => {
@@ -31,6 +31,7 @@ const Login = () => {
               try {
                 setLoading(true);
                 await login(form.email, form.senha);
+                await ensureDefaultCompanySelected();
                 navigate("/dashboard");
               } catch {
                 toast({ title: "Falha no login", description: "Verifique seu email e senha.", variant: "destructive" });
@@ -40,7 +41,7 @@ const Login = () => {
             }}
           >
             <div>
-              <label htmlFor="email" className="block mb-1 font-semibold text-slate-200">
+              <label htmlFor="email" className="block mb-1 font-semibold text-slate-700">
                 Email
               </label>
               <Input
@@ -51,10 +52,11 @@ const Login = () => {
                 value={form.email}
                 onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
                 required
+                className="border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:ring-primary/30"
               />
             </div>
             <div>
-              <label htmlFor="senha" className="block mb-1 font-semibold text-slate-200">
+              <label htmlFor="senha" className="block mb-1 font-semibold text-slate-700">
                 Senha
               </label>
               <div className="relative">
@@ -66,13 +68,13 @@ const Login = () => {
                   value={form.senha}
                   onChange={(e) => setForm((f) => ({ ...f, senha: e.target.value }))}
                   required
-                  className="pr-10"
+                  className="pr-10 border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:ring-primary/30"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword((v) => !v)}
                   aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-100 transition-colors"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-800 transition-colors"
                 >
                   {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
                 </button>
@@ -83,7 +85,7 @@ const Login = () => {
             </Button>
           </form>
           <div className="mt-4 text-center">
-            <Link to="/cadastro" className="text-sm text-slate-300 hover:text-white transition-colors underline underline-offset-2">
+            <Link to="/cadastro" className="text-sm text-slate-700 hover:text-slate-900 transition-colors underline underline-offset-2">
               Não tem conta? Cadastre-se
             </Link>
           </div>
