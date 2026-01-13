@@ -1,4 +1,4 @@
-name: Deploy Web (dados.movmais.com)
+name: Deploy Web (dados.movmais.com) - COM DEBUG
 
 on:
   push:
@@ -9,12 +9,8 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Deploy to server
+      - name: "📍 Conectar ao servidor"
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -22,82 +18,129 @@ jobs:
           key: ${{ secrets.DEPLOY_KEY }}
           script: |
             echo "=========================================="
-            echo "🚀 INICIANDO DEPLOY DE dados.movmais.com"
+            echo "🚀 INICIANDO DEPLOY DA WEB"
             echo "=========================================="
-            
             echo ""
-            echo "📍 PASSO 1: Verificar diretório"
-            ls -la /opt/movmais/apps/web
-            
+
+            echo "📍 Data/Hora do deploy"
+            date
             echo ""
-            echo "📍 PASSO 2: Entrar no diretório"
-            cd /opt/movmais/apps/web || exit 1
+
+            echo "📍 Verificar diretório"
             pwd
-            
+            ls -la /opt/movmais/apps/
             echo ""
-            echo "📍 PASSO 3: Verificar status do git ANTES"
-            git status
-            git log --oneline -5
-            
+
+            echo "📍 Versão atual no servidor (ANTES do deploy)"
+            cd /opt/movmais/apps/web
+            echo "Commit atual:"
+            git log -1 --oneline
+            echo "Branch:"
+            git branch
             echo ""
-            echo "📍 PASSO 4: Fazer fetch do repositório"
+
+            echo "📍 Atualizar código do GitHub"
             git fetch origin
-            
+            echo "Commits disponíveis:"
+            git log -3 --oneline
             echo ""
-            echo "📍 PASSO 5: Reset hard para a versão remota"
-            git reset --hard origin/main || git reset --hard origin/master
-            
+
+            echo "📍 Fazer reset hard para origin/main"
+            git reset --hard origin/main
+            echo "✅ Reset concluído"
             echo ""
-            echo "📍 PASSO 6: Verificar status do git DEPOIS"
+
+            echo "📍 Versão APÓS git reset"
+            git log -1 --oneline
+            echo ""
+
+            echo "📍 Verificar arquivos alterados"
             git status
-            git log --oneline -5
-            
             echo ""
-            echo "📍 PASSO 7: Listar arquivos atualizados"
-            ls -la
-            
+
+            echo "📍 Verificar conteúdo de arquivo importante (package.json)"
+            head -5 package.json
             echo ""
-            echo "📍 PASSO 8: Voltar para diretório do docker-compose"
+
+            echo "=========================================="
+            echo "📝 CRIAR ARQUIVO .ENV COM SECRETS"
+            echo "=========================================="
+            cat > /opt/movmais/apps/web/.env << 'ENVEOF'
+            VITE_API_URL=${{ secrets.VITE_API_URL }}
+            NODE_ENV=production
+            ENVEOF
+            echo "✅ Arquivo .env criado com secrets do GitHub"
+            echo ""
+
+            echo "=========================================="
+            echo "🐳 DOCKER BUILD"
+            echo "=========================================="
             cd /opt/movmais
-            pwd
-            
             echo ""
-            echo "📍 PASSO 9: Verificar docker-compose"
-            ls -la docker-compose-apps.yml
-            
+
+            echo "📍 Remover imagem antiga"
+            docker rmi movmais-web -f || echo "Nenhuma imagem anterior"
             echo ""
-            echo "📍 PASSO 10: Parar container antigo"
-            docker-compose -f docker-compose-apps.yml stop movmais-web || true
-            
+
+            echo "📍 Parar container antigo"
+            docker-compose stop web || echo "Container não estava rodando"
             echo ""
-            echo "📍 PASSO 11: Remover container antigo"
-            docker-compose -f docker-compose-apps.yml rm -f movmais-web || true
-            
+
+            echo "📍 Iniciar build (sem cache)"
+            docker-compose build --no-cache web
+            BUILD_STATUS=$?
+
+            if [ $BUILD_STATUS -eq 0 ]; then
+              echo "✅ BUILD SUCESSO"
+            else
+              echo "❌ BUILD FALHOU"
+              exit 1
+            fi
             echo ""
-            echo "📍 PASSO 12: Fazer build da imagem"
-            docker-compose -f docker-compose-apps.yml build --no-cache movmais-web
-            
-            echo ""
-            echo "📍 PASSO 13: Iniciar novo container"
-            docker-compose -f docker-compose-apps.yml up -d movmais-web
-            
-            echo ""
-            echo "📍 PASSO 14: Verificar se container está rodando"
-            docker ps | grep movmais-web
-            
-            echo ""
-            echo "📍 PASSO 15: Verificar logs do container"
-            docker logs movmais-web | tail -20
-            
-            echo ""
+
             echo "=========================================="
-            echo "✅ DEPLOY DE dados.movmais.com CONCLUÍDO!"
+            echo "🚀 INICIAR CONTAINER"
             echo "=========================================="
-      
-      - name: Notify success
-        if: success()
-        run: echo "🚀 Deploy de dados.movmais.com realizado com sucesso!"
-      
-      - name: Notify failure
-        if: failure()
-        run: echo "❌ Falha no deploy de dados.movmais.com"
+            docker-compose up -d web
+            echo ""
+
+            echo "📍 Aguardar 5 segundos para container iniciar"
+            sleep 5
+            echo ""
+
+            echo "📍 Status dos containers"
+            docker-compose ps
+            echo ""
+
+            echo "📍 Logs do container (últimas 30 linhas)"
+            docker logs movmais-web | tail -30
+            echo ""
+
+            echo "=========================================="
+            echo "✅ VERIFICAÇÕES FINAIS"
+            echo "=========================================="
+
+            echo "📍 Verificar versão no servidor (APÓS deploy)"
+            cd /opt/movmais/apps/web
+            echo "Commit atual:"
+            git log -1 --oneline
+            echo ""
+
+            echo "📍 Verificar se container está rodando"
+            docker-compose ps web
+            echo ""
+
+            echo "📍 Testar acesso à Web"
+            curl -s -I http://127.0.0.1:3000/ | head -3
+            echo ""
+
+            echo "📍 Verificar porta 3000 está aberta"
+            netstat -tlnp | grep 3000 || echo "⚠️ Porta 3000 não encontrada"
+            echo ""
+
+            echo "=========================================="
+            echo "✅ DEPLOY CONCLUÍDO COM SUCESSO!"
+            echo "=========================================="
+            echo "Timestamp: $(date)"
+            echo "URL: https://dados.movmais.com"
+            echo "=========================================="
