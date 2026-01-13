@@ -2,7 +2,15 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { buildApiUrl } from "@/lib/config";
-import { ensureDefaultCompanySelected, fetchMyCompanies, getActiveCompanyId, getAuthHeaders, type CompanyAccess } from "@/lib/auth";
+import {
+  ensureDefaultCompanySelected,
+  fetchMyCompanies,
+  getActiveCompanyId,
+  getAuthHeaders,
+  logout,
+  setActiveCompanyId,
+  type CompanyAccess,
+} from "@/lib/auth";
 import { useEffect, useState } from "react";
 import { useToast } from "@/components/ui/use-toast";
 
@@ -22,6 +30,8 @@ const ConfigEmpresa = () => {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [clearingData, setClearingData] = useState(false);
+  const [deletingCompany, setDeletingCompany] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [company, setCompany] = useState<CompanyMe | null>(null);
 
@@ -32,6 +42,9 @@ const ConfigEmpresa = () => {
   const [groupCreating, setGroupCreating] = useState(false);
   const [groupSaving, setGroupSaving] = useState(false);
   const [groupNameDraft, setGroupNameDraft] = useState("");
+
+  const [confirmClearName, setConfirmClearName] = useState("");
+  const [confirmDeleteName, setConfirmDeleteName] = useState("");
 
   useEffect(() => {
     const ac = new AbortController();
@@ -95,6 +108,9 @@ const ConfigEmpresa = () => {
   }, []);
 
   const canSave = form.name.trim().length > 0 && form.site.trim().length > 0 && !saving;
+  const expectedCompanyName = company?.name ?? "";
+  const canClearData = expectedCompanyName.length > 0 && confirmClearName === expectedCompanyName && !clearingData;
+  const canDeleteCompany = expectedCompanyName.length > 0 && confirmDeleteName === expectedCompanyName && !deletingCompany;
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
@@ -204,6 +220,66 @@ const ConfigEmpresa = () => {
     }
   }
 
+  async function handleClearData() {
+    if (!company?.id) return;
+    setError(null);
+    try {
+      setClearingData(true);
+      const res = await fetch(buildApiUrl("/companies/me/danger/clear-data"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+        body: JSON.stringify({ confirm_name: confirmClearName }),
+      });
+      if (res.status === 401) throw new Error("Não autenticado");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as any)?.message || "Erro ao apagar dados");
+      toast({
+        title: "Dados apagados",
+        description: `Orders: ${(data as any)?.deleted?.orders ?? 0} | Items: ${(data as any)?.deleted?.order_items ?? 0} | Products: ${(data as any)?.deleted?.products ?? 0} | Customers: ${(data as any)?.deleted?.customers ?? 0}`,
+      });
+      setConfirmClearName("");
+      window.dispatchEvent(new Event("movmais:companies_changed"));
+    } catch (e: any) {
+      setError(String(e?.message || "Erro ao apagar dados"));
+    } finally {
+      setClearingData(false);
+    }
+  }
+
+  async function handleDeleteCompany() {
+    if (!company?.id) return;
+    setError(null);
+    try {
+      setDeletingCompany(true);
+      const res = await fetch(buildApiUrl("/companies/me/danger/delete"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+        body: JSON.stringify({ confirm_name: confirmDeleteName }),
+      });
+      if (res.status === 401) throw new Error("Não autenticado");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as any)?.message || "Erro ao deletar empresa");
+
+      toast({ title: "Empresa deletada", description: "A empresa e os dados foram removidos." });
+
+      // A empresa ativa foi removida; força re-seleção.
+      setActiveCompanyId(null);
+      window.dispatchEvent(new Event("movmais:companies_changed"));
+
+      const next = await ensureDefaultCompanySelected();
+      if (!next) {
+        logout();
+        window.location.href = "/login";
+        return;
+      }
+      window.location.reload();
+    } catch (e: any) {
+      setError(String(e?.message || "Erro ao deletar empresa"));
+    } finally {
+      setDeletingCompany(false);
+    }
+  }
+
   return (
     <div className="mx-auto max-w-5xl">
       <h1 className="text-2xl font-extrabold text-slate-900">Configurações • Empresa</h1>
@@ -308,6 +384,53 @@ const ConfigEmpresa = () => {
                   )}
                 </div>
               )}
+            </div>
+
+            <div className="max-w-xl">
+              <div className="text-lg font-extrabold text-red-700">Danger Zone</div>
+              <div className="mt-2 text-sm text-slate-600">
+                Ações irreversíveis. Para confirmar, digite exatamente o nome da empresa:{" "}
+                <span className="font-semibold text-slate-900">{expectedCompanyName || "—"}</span>
+              </div>
+
+              <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4">
+                <div className="font-bold text-red-800">Apagar dados</div>
+                <div className="mt-1 text-sm text-red-800/90">
+                  Remove <b>orders</b>, <b>order_items</b>, <b>products</b> e <b>customers</b> dessa empresa.
+                </div>
+
+                <div className="mt-3 grid grid-cols-1 gap-3">
+                  <Input
+                    value={confirmClearName}
+                    onChange={(e) => setConfirmClearName(e.target.value)}
+                    placeholder="Digite o nome exato da empresa para confirmar"
+                    className="border-red-200 bg-white text-slate-900 placeholder:text-slate-400 focus:ring-red-500/30"
+                  />
+                  <Button type="button" variant="destructive" disabled={!canClearData} onClick={handleClearData}>
+                    {clearingData ? "Apagando..." : "Apagar dados"}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="mt-4 rounded-lg border border-red-300 bg-red-50 p-4">
+                <div className="font-bold text-red-900">Deletar empresa</div>
+                <div className="mt-1 text-sm text-red-900/90">
+                  Remove todos os dados acima e também <b>company_users</b>, <b>company_platforms</b> e o registro da{" "}
+                  <b>empresa</b>. Se o <b>grupo</b> ficar sem empresas, ele também é deletado.
+                </div>
+
+                <div className="mt-3 grid grid-cols-1 gap-3">
+                  <Input
+                    value={confirmDeleteName}
+                    onChange={(e) => setConfirmDeleteName(e.target.value)}
+                    placeholder="Digite o nome exato da empresa para confirmar"
+                    className="border-red-300 bg-white text-slate-900 placeholder:text-slate-400 focus:ring-red-500/30"
+                  />
+                  <Button type="button" variant="destructive" disabled={!canDeleteCompany} onClick={handleDeleteCompany}>
+                    {deletingCompany ? "Deletando..." : "Deletar empresa"}
+                  </Button>
+                </div>
+              </div>
             </div>
           </div>
         ) : null}

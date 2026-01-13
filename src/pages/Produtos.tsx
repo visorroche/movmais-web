@@ -133,7 +133,7 @@ const Produtos = () => {
             <Input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Buscar por SKU, nome, EAN, slug, referência..."
+              placeholder="Buscar por SKU, nome, EAN, referência..."
               className="pl-9 border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:ring-primary/30"
             />
           </div>
