@@ -28,6 +28,12 @@ const DashboardAoVivo = () => {
 
   const formatPct1 = (value: number): string => `${value.toFixed(1).replace(".", ",")}%`;
 
+  const truncate10 = (value: string): string => {
+    const s = String(value ?? "");
+    if (s.length <= 10) return s;
+    return `${s.slice(0, 7)}...`;
+  };
+
   const hexToRgba = (hex: string, alpha: number): string => {
     const h = String(hex || "").replace("#", "").trim();
     if (h.length !== 6) return hex;
@@ -71,6 +77,38 @@ const DashboardAoVivo = () => {
 
   const now = new Date();
   const currentHour = now.getHours();
+  type HourlyRow = { day: string; hour: number; revenue: number };
+  type LiveKpis = {
+    revenueSoFar: number;
+    revenueDay: number;
+    orders: number;
+    uniqueCustomers: number;
+    itemsSold: number;
+    avgTicket: number;
+    cartItemsAdded: number;
+    conversionPct: number;
+  };
+  type LiveResponse = {
+    today: string;
+    currentHour: number;
+    projection: { projectedTodayTotal: number };
+    kpis: {
+      today: LiveKpis;
+      yesterday: LiveKpis;
+      d7: LiveKpis;
+      d14: LiveKpis;
+      d21: LiveKpis;
+      d28: LiveKpis;
+    };
+    hourly: HourlyRow[];
+    topProducts: { sku: string; name: string | null; qty: number; revenue: number }[];
+    byMarketplace: { id: string; value: number }[];
+    byCategory: { id: string; value: number }[];
+    byState: { id: string; value: number }[];
+  };
+  const [live, setLive] = useState<LiveResponse | null>(null);
+  const [liveLoading, setLiveLoading] = useState(false);
+  const [liveError, setLiveError] = useState<string | null>(null);
   const d7Label = "D-7";
   const d14Label = "D-14";
   const d21Label = "D-21";
@@ -78,16 +116,8 @@ const DashboardAoVivo = () => {
   type ComparePeriod = "Ontem" | "D-7" | "D-14" | "D-21" | "D-28";
   const [comparePeriod, setComparePeriod] = useState<ComparePeriod>("D-7");
 
-  // Dados fake baseados no exemplo
-  const lastWeekSameDayTotal = 50_000;
-  const d14SameDayTotal = 48_000;
-  const d21SameDayTotal = 46_000;
-  const d28SameDayTotal = 44_000;
-  const yesterdayTotal = 60_000;
-  const lastWeekYesterdayTotal = 30_000;
-  const growth = lastWeekYesterdayTotal > 0 ? yesterdayTotal / lastWeekYesterdayTotal : 1;
-  const projectedTodayTotal = Math.round(lastWeekSameDayTotal * growth);
-  const todaySoFar = 25_000;
+  const projectedTodayTotal = live?.projection?.projectedTodayTotal ?? 0;
+  const todaySoFar = live?.kpis?.today?.revenueSoFar ?? 0;
 
   // filtros (mesma base do dashboard, sem data)
   type FiltersResponse = {
@@ -244,141 +274,99 @@ const DashboardAoVivo = () => {
     [citiesOverride, filters],
   );
 
-  // aplica filtros (fake) como escala determinística: serve só para mostrar interação (depois liga no SQL)
-  const scale = useMemo(() => {
-    const key = [...channels].sort().join("|") + "||" + [...categories].sort().join("|");
-    if (!key) return 1;
-    let h = 0;
-    for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
-    const v = (h % 60) / 100; // 0.00..0.59
-    return 0.35 + v; // 0.35..0.94
-  }, [channels, categories]);
+  const todaySoFarF = todaySoFar;
+  const projectedTodayTotalF = projectedTodayTotal;
 
-  // variação (fake determinística) vs. semana passada, baseada nos filtros atuais
-  const weekDeltaFor = useMemo(() => {
-    const key =
-      [...stores].sort().join("|") +
-      "||" +
-      [...channels].sort().join("|") +
-      "||" +
-      [...categories].sort().join("|") +
-      "||" +
-      [...states].sort().join("|") +
-      "||" +
-      [...cities].sort().join("|");
-    const hash = (s: string) => {
-      let h = 2166136261;
-      for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
-      return h >>> 0;
-    };
-    return (name: string) => {
-      const h = hash(`${key}::${name}`);
-      const sign = h % 2 === 0 ? 1 : -1;
-      const pct = 0.02 + ((h % 1800) / 10000); // 2%..20%
-      return sign * pct;
-    };
-  }, [stores, channels, categories, states, cities]);
+  useEffect(() => {
+    if (!filters) return;
+    if (!initialStoresSet.current) return;
 
-  const compareFactor = useMemo(() => {
-    if (comparePeriod === "Ontem") return 0.45;
-    if (comparePeriod === "D-7") return 1;
-    if (comparePeriod === "D-14") return 1.7;
-    if (comparePeriod === "D-21") return 2.2;
-    return 2.8; // D-28
-  }, [comparePeriod]);
+    const ac = new AbortController();
+    setLiveLoading(true);
+    setLiveError(null);
 
-  const prevFor = useMemo(() => {
-    const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
-    return (cur: number, name: string) => {
-      const base = weekDeltaFor(name);
-      const scaled = clamp(base * compareFactor, -0.45, 0.65);
-      const denom = 1 + scaled;
-      if (!Number.isFinite(cur) || denom === 0) return cur;
-      return Math.max(1, Math.round(cur / denom));
-    };
-  }, [compareFactor, weekDeltaFor]);
+    const qs = new URLSearchParams();
+    for (const s of stores) qs.append("company_id", s);
+    for (const c of channels) qs.append("channel", c);
+    for (const c of categories) qs.append("category", c);
+    for (const st of states) qs.append("state", st);
+    for (const city of cities) qs.append("city", city);
 
-  const prevPctFor = useMemo(() => {
-    const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
-    return (cur: number, name: string) => {
-      const base = weekDeltaFor(name);
-      const scaled = clamp(base * compareFactor, -0.45, 0.65);
-      const denom = 1 + scaled;
-      if (!Number.isFinite(cur) || denom === 0) return cur;
-      return Math.max(0.1, Number((cur / denom).toFixed(1)));
-    };
-  }, [compareFactor, weekDeltaFor]);
+    fetch(buildApiUrl(`/companies/me/dashboard/live/overview?${qs.toString()}`), {
+      headers: { ...getAuthHeaders() },
+      signal: ac.signal,
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error((data as any)?.message || "Erro ao carregar Ao Vivo");
+        }
+        return res.json() as Promise<LiveResponse>;
+      })
+      .then((d) => setLive(d))
+      .catch((e: any) => {
+        if (String(e?.name || "") === "AbortError") return;
+        setLive(null);
+        setLiveError(String(e?.message || "Erro ao carregar Ao Vivo"));
+      })
+      .finally(() => setLiveLoading(false));
 
-  const todaySoFarF = Math.round(todaySoFar * scale);
-  const projectedTodayTotalF = Math.round(projectedTodayTotal * scale);
-  const todaySoFarPrev = Math.max(1, Math.round(todaySoFarF / (1 + weekDeltaFor("todaySoFar"))));
-  const projectedTodayPrev = Math.max(1, Math.round(projectedTodayTotalF / (1 + weekDeltaFor("projectedToday"))));
+    return () => ac.abort();
+  }, [filters, stores, channels, categories, states, cities]);
 
-  // Distribuição horária (pesos) para simular horários que mais vendem (picos no meio do dia e no começo da noite)
-  const hourWeights = useMemo(() => {
-    const w: number[] = [];
-    for (let h = 0; h < 24; h++) {
-      // duas gaussianas simples + baseline
-      const p1 = Math.exp(-Math.pow(h - 13, 2) / (2 * 3.2 * 3.2));
-      const p2 = Math.exp(-Math.pow(h - 20, 2) / (2 * 2.4 * 2.4));
-      const base = 0.12;
-      w.push(base + 1.25 * p1 + 0.85 * p2);
+  const apiHour = live?.currentHour;
+  const currentHourLabel = String(Number.isInteger(apiHour) ? apiHour : currentHour).padStart(2, "0");
+
+  const buildHourly = (rows: HourlyRow[], day: string): { x: string; y: number }[] => {
+    const map = new Map<number, number>();
+    for (const r of rows) {
+      if (r.day === day) map.set(Number(r.hour), Number(r.revenue) || 0);
     }
-    // normaliza
-    const sum = w.reduce((a, b) => a + b, 0);
-    return w.map((x) => x / sum);
-  }, []);
-
-  const makeCumulativeSeries = (total: number) => {
-    let acc = 0;
-    const points: { x: string; y: number }[] = [];
+    const pts: { x: string; y: number }[] = [];
     for (let h = 0; h < 24; h++) {
-      acc += total * hourWeights[h];
-      const label = `${String(h).padStart(2, "0")}:00`;
-      points.push({ x: label, y: Math.round(acc) });
+      pts.push({ x: `${String(h).padStart(2, "0")}:00`, y: Number(map.get(h) ?? 0) || 0 });
     }
-    return points;
+    return pts;
   };
 
-  const lastWeekSameDay = useMemo(() => makeCumulativeSeries(lastWeekSameDayTotal * scale), [hourWeights, scale]);
-  const d14SameDay = useMemo(() => makeCumulativeSeries(d14SameDayTotal * scale), [hourWeights, scale]);
-  const d21SameDay = useMemo(() => makeCumulativeSeries(d21SameDayTotal * scale), [hourWeights, scale]);
-  const d28SameDay = useMemo(() => makeCumulativeSeries(d28SameDayTotal * scale), [hourWeights, scale]);
-  const yesterday = useMemo(() => makeCumulativeSeries(yesterdayTotal * scale), [hourWeights, scale]);
-
-  const todayActual = useMemo(() => {
-    // curva até a hora atual, escalada para bater todaySoFar
-    const base = makeCumulativeSeries(1); // cumulativo em "unidades"
-    const denom = base[Math.min(currentHour, 23)]?.y || 1;
-    const s = denom > 0 ? todaySoFarF / denom : 0;
-    return base.map((p, idx) => ({
-      x: p.x,
-      y: idx <= currentHour ? Math.round(p.y * s) : null,
-    }));
-  }, [currentHour, hourWeights, todaySoFarF]);
-
-  const todayProjection = useMemo(() => {
-    // curva do dia inteiro com alvo projectedTodayTotal, alinhada para continuar do todaySoFar a partir da hora atual
-    const full = makeCumulativeSeries(projectedTodayTotalF);
-    const atH = full[Math.min(currentHour, 23)]?.y ?? 0;
-    const delta = todaySoFarF - atH;
-    return full.map((p, idx) => ({
-      x: p.x,
-      y: idx >= currentHour ? Math.max(0, p.y + delta) : null,
-    }));
-  }, [currentHour, projectedTodayTotalF, todaySoFarF, hourWeights]);
-
   const lineData = useMemo(() => {
+    const rows = live?.hourly || [];
+    const today = live?.today || "";
+    const y = today ? new Date(`${today}T00:00:00`) : new Date();
+    const ymd = (d: Date) => d.toISOString().slice(0, 10);
+    const yesterday = today ? ymd(new Date(y.getTime() - 1 * 86400000)) : "";
+    const d7 = today ? ymd(new Date(y.getTime() - 7 * 86400000)) : "";
+    const d14 = today ? ymd(new Date(y.getTime() - 14 * 86400000)) : "";
+    const d21 = today ? ymd(new Date(y.getTime() - 21 * 86400000)) : "";
+    const d28 = today ? ymd(new Date(y.getTime() - 28 * 86400000)) : "";
+    const hNow = Number.isInteger(apiHour) ? (apiHour as number) : currentHour;
+
+    const todayFull = today
+      ? buildHourly(rows, today)
+      : Array.from({ length: 24 }, (_, h) => ({ x: `${String(h).padStart(2, "0")}:00`, y: 0 }));
+    const lastWeekSameDay = d7 ? buildHourly(rows, d7) : todayFull.map((p) => ({ ...p, y: 0 }));
+
+    // Projeção por hora: usa a "distribuição" do D-7 e escala pelo total projetado do dia.
+    const projTotal = projectedTodayTotalF;
+    const d7Total = lastWeekSameDay.reduce((a, b) => a + (Number(b.y) || 0), 0);
+    const projScaled =
+      projTotal > 0 && d7Total > 0
+        ? lastWeekSameDay.map((p) => ({ ...p, y: (Number(p.y) || 0) * (projTotal / d7Total) }))
+        : lastWeekSameDay.map((p) => ({ ...p, y: 0 }));
+
+    const todayActual = todayFull.map((p, idx) => ({ x: p.x, y: idx <= hNow ? p.y : null }));
+    const todayProjection = projScaled.map((p, idx) => ({ x: p.x, y: idx >= hNow ? p.y : null }));
+
     return [
-      { id: "Hoje", data: todayActual.filter((p: any) => p.y !== null).map((p: any) => ({ x: p.x, y: p.y })) },
-      { id: "Hoje (projeção)", data: todayProjection.filter((p: any) => p.y !== null).map((p: any) => ({ x: p.x, y: p.y })) },
-      { id: "Ontem", data: yesterday },
-      { id: d7Label, data: lastWeekSameDay },
-      { id: d14Label, data: d14SameDay },
-      { id: d21Label, data: d21SameDay },
-      { id: d28Label, data: d28SameDay },
+      { id: "Hoje", data: todayActual },
+      { id: "Hoje (projeção)", data: todayProjection },
+      { id: "Ontem", data: yesterday ? buildHourly(rows, yesterday) : todayFull.map((p) => ({ ...p, y: 0 })) },
+      { id: d7Label, data: d7 ? lastWeekSameDay : todayFull.map((p) => ({ ...p, y: 0 })) },
+      { id: d14Label, data: d14 ? buildHourly(rows, d14) : todayFull.map((p) => ({ ...p, y: 0 })) },
+      { id: d21Label, data: d21 ? buildHourly(rows, d21) : todayFull.map((p) => ({ ...p, y: 0 })) },
+      { id: d28Label, data: d28 ? buildHourly(rows, d28) : todayFull.map((p) => ({ ...p, y: 0 })) },
     ];
-  }, [todayActual, todayProjection, yesterday, lastWeekSameDay, d14SameDay, d21SameDay, d28SameDay, d7Label, d14Label, d21Label, d28Label]);
+  }, [live, apiHour, currentHour, d7Label, d14Label, d21Label, d28Label, projectedTodayTotalF, todaySoFarF]);
 
   const dashedProjectionLayer = (props: any) => {
     const serie = props.series?.find((s: any) => s.id === "Hoje (projeção)");
@@ -401,70 +389,49 @@ const DashboardAoVivo = () => {
     );
   };
 
-  const topProducts = useMemo(
-    () =>
-      [
-        { name: "Cápsulas Premium 10un", qty: 540, revenue: 16200 },
-        { name: "Filtro Reutilizável", qty: 210, revenue: 6300 },
-        { name: "Cafeteira Espresso X", qty: 120, revenue: 18400 },
-        { name: "Caneca Térmica 500ml", qty: 95, revenue: 4750 },
-        { name: "Moedor Elétrico", qty: 68, revenue: 9800 },
-      ].map((p) => ({ ...p, qty: Math.max(1, Math.round(p.qty * scale)), revenue: Math.max(1, Math.round(p.revenue * scale)) })),
-    [scale],
-  );
+  const topProducts = useMemo(() => {
+    const rows = live?.topProducts || [];
+    return rows.map((r) => ({ name: String(r.name ?? r.sku ?? ""), qty: Number(r.qty ?? 0) || 0, revenue: Number(r.revenue ?? 0) || 0 }));
+  }, [live]);
 
-  const kpis = useMemo(
-    () => ({
-      uniqueCustomers: Math.max(1, Math.round(312 * scale)),
-      cartItemsAdded: Math.max(1, Math.round(1840 * scale)),
-      orders: Math.max(1, Math.round(228 * scale)),
-      conversionPct: 18.4,
-      itemsSold: Math.max(1, Math.round(1034 * scale)),
-      avgTicket: 433.2,
-    }),
-    [scale],
-  );
+  const kpis = useMemo(() => {
+    const t = live?.kpis?.today;
+    return {
+      uniqueCustomers: Number(t?.uniqueCustomers ?? 0) || 0,
+      cartItemsAdded: Number(t?.cartItemsAdded ?? 0) || 0,
+      orders: Number(t?.orders ?? 0) || 0,
+      conversionPct: Number(t?.conversionPct ?? 0) || 0,
+      itemsSold: Number(t?.itemsSold ?? 0) || 0,
+      avgTicket: Number(t?.avgTicket ?? 0) || 0,
+    };
+  }, [live]);
 
   const kpisPrev = useMemo(() => {
-    const prev = (cur: number, name: string) => prevFor(cur, name);
-    const prevPct = (cur: number, name: string) => prevPctFor(cur, name);
+    const src =
+      comparePeriod === "Ontem"
+        ? live?.kpis?.yesterday
+        : comparePeriod === "D-7"
+          ? live?.kpis?.d7
+          : comparePeriod === "D-14"
+            ? live?.kpis?.d14
+            : comparePeriod === "D-21"
+              ? live?.kpis?.d21
+              : live?.kpis?.d28;
     return {
-      uniqueCustomers: prev(kpis.uniqueCustomers, "kpi.uniqueCustomers"),
-      cartItemsAdded: prev(kpis.cartItemsAdded, "kpi.cartItemsAdded"),
-      orders: prev(kpis.orders, "kpi.orders"),
-      conversionPct: prevPct(kpis.conversionPct, "kpi.conversionPct"),
-      itemsSold: prev(kpis.itemsSold, "kpi.itemsSold"),
-      avgTicket: prev(kpis.avgTicket, "kpi.avgTicket"),
+      uniqueCustomers: Number(src?.uniqueCustomers ?? 0) || 0,
+      cartItemsAdded: Number(src?.cartItemsAdded ?? 0) || 0,
+      orders: Number(src?.orders ?? 0) || 0,
+      conversionPct: Number(src?.conversionPct ?? 0) || 0,
+      itemsSold: Number(src?.itemsSold ?? 0) || 0,
+      avgTicket: Number(src?.avgTicket ?? 0) || 0,
     };
-  }, [kpis, prevFor, prevPctFor]);
+  }, [live, comparePeriod]);
 
-  const pieByCategory = useMemo(
-    () => [
-      { id: "Café", label: "Café", value: Math.round(42000 * scale) },
-      { id: "Acessórios", label: "Acessórios", value: Math.round(27000 * scale) },
-      { id: "Máquinas", label: "Máquinas", value: Math.round(31000 * scale) },
-      { id: "Chás", label: "Chás", value: Math.round(14500 * scale) },
-      { id: "Cápsulas", label: "Cápsulas", value: Math.round(21500 * scale) },
-      { id: "Kits", label: "Kits", value: Math.round(9800 * scale) },
-      { id: "Peças", label: "Peças", value: Math.round(7600 * scale) },
-      { id: "Moedores", label: "Moedores", value: Math.round(13200 * scale) },
-      { id: "Canecas", label: "Canecas", value: Math.round(8900 * scale) },
-      { id: "Outros", label: "Outros", value: Math.round(6100 * scale) },
-    ],
-    [scale],
-  );
+  const pieByCategory = useMemo(() => (live?.byCategory || []).map((d) => ({ id: d.id, label: d.id, value: d.value })), [live]);
 
   const BAR_ORANGE = "#FF751A";
 
-  const pieByMarketplace = useMemo(
-    () => [
-      { id: "Mercado Livre", label: "Mercado Livre", value: Math.round(38000 * scale) },
-      { id: "Shopee", label: "Shopee", value: Math.round(22000 * scale) },
-      { id: "Amazon", label: "Amazon", value: Math.round(16000 * scale) },
-      { id: "Magalu", label: "Magalu", value: Math.round(12000 * scale) },
-    ],
-    [scale],
-  );
+  const pieByMarketplace = useMemo(() => (live?.byMarketplace || []).map((d) => ({ id: d.id, label: d.id, value: d.value })), [live]);
 
   const marketplaceColorById = useMemo(() => {
     const map = new Map<string, string>();
@@ -479,39 +446,7 @@ const DashboardAoVivo = () => {
     else setter([next]);
   };
 
-  const salesByUF = useMemo(() => {
-    // fake determinístico: cada UF recebe um valor base (para o mapa ficar bonito)
-    const base: Record<string, number> = {
-      SP: 42000,
-      RJ: 18000,
-      MG: 22000,
-      PR: 12000,
-      RS: 14000,
-      SC: 9000,
-      BA: 8000,
-      GO: 7000,
-      DF: 6000,
-      PE: 6500,
-      CE: 5000,
-      PA: 4500,
-      AM: 3500,
-      MT: 3200,
-      MS: 2800,
-      ES: 2600,
-      RN: 2100,
-      PB: 1900,
-      AL: 1700,
-      SE: 1600,
-      PI: 1500,
-      MA: 1400,
-      TO: 1200,
-      RO: 1100,
-      AC: 800,
-      AP: 700,
-      RR: 650,
-    };
-    return Object.entries(base).map(([id, v]) => ({ id, value: Math.round(v * scale) }));
-  }, [scale]);
+  const salesByUF = useMemo(() => (live?.byState || []).map((d) => ({ id: d.id, value: d.value })), [live]);
 
   const salesByUFMap = useMemo(() => new Map(salesByUF.map((d) => [String(d.id), d.value])), [salesByUF]);
   const mapMax = useMemo(() => Math.max(1, ...salesByUF.map((d) => d.value)), [salesByUF]);
@@ -550,6 +485,8 @@ const DashboardAoVivo = () => {
         </button>
       </div>
       <h1 className="text-2xl font-extrabold text-slate-900">Vendas ao vivo (Hoje)</h1>
+      {liveLoading ? <div className="mt-2 text-sm text-slate-600">Carregando dados ao vivo...</div> : null}
+      {!liveLoading && liveError ? <div className="mt-2 text-sm text-red-600">{liveError}</div> : null}
 
       {/* Topo: totalizador */}
       <Card className="mt-3 w-full border-slate-200 bg-white p-5">
@@ -620,7 +557,7 @@ const DashboardAoVivo = () => {
             <div className="text-lg font-extrabold text-slate-900">Venda hora a hora</div>
           </div>
           <div className="text-xs text-slate-600">
-            Hora atual: <span className="font-extrabold text-slate-900">{String(currentHour).padStart(2, "0")}:00</span>
+            Hora atual: <span className="font-extrabold text-slate-900">{currentHourLabel}:00</span>
           </div>
         </div>
 
@@ -719,7 +656,10 @@ const DashboardAoVivo = () => {
             axisLeft={{
               format: (v) => formatBRLCompact(Number(v)),
             }}
-            enablePoints={false}
+            enablePoints={true}
+            pointSize={6}
+            pointBorderWidth={1}
+            pointBorderColor={{ from: "color", modifiers: [["darker", 0.3]] }}
             useMesh={true}
             colors={(d) => {
               const id = String(d.id);
@@ -733,13 +673,29 @@ const DashboardAoVivo = () => {
               return CHART_COLORS[5];
             }}
             legends={[]}
+            tooltip={({ point }: any) => {
+              const serieLabel =
+                point?.serieId ??
+                point?.serie?.id ??
+                point?.data?.serieId ??
+                point?.data?.id ??
+                point?.id ??
+                "";
+              return (
+                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 shadow-xl">
+                  <div className="font-extrabold">{String(serieLabel || "-")}</div>
+                  <div className="text-slate-700">{String(point?.data?.x ?? "")}</div>
+                  <div className="mt-0.5">{formatBRLNoSpace(Number(point?.data?.y ?? 0))}</div>
+                </div>
+              );
+            }}
             theme={{
               axis: { ticks: { text: { fill: "#475569" } }, legend: { text: { fill: "#334155", fontWeight: 700 } } },
               grid: { line: { stroke: "#E2E8F0" } },
               legends: { text: { fill: "#334155" } },
               tooltip: { container: { background: "#fff", color: "#0f172a", fontSize: 12, borderRadius: 12 } },
             }}
-            layers={["grid", "markers", "areas", "lines", dashedProjectionLayer, "slices", "axes"]}
+            layers={["grid", "markers", "areas", "lines", "points", dashedProjectionLayer, "slices", "mesh", "axes"]}
           />
         </div>
       </Card>
@@ -750,14 +706,17 @@ const DashboardAoVivo = () => {
         <Card className="w-full border-slate-200 bg-white p-5 lg:col-span-6">
           <div className="text-lg font-extrabold text-slate-900">Produtos mais vendidos</div>
           <div className="mt-3 space-y-3">
-            {topProducts.map((p) => (
+            {topProducts.length ? (
+              topProducts.map((p) => (
               <div key={p.name} className="flex items-start justify-between gap-3 border-t border-slate-200 pt-3 first:border-t-0 first:pt-0">
                 <div className="min-w-0 flex items-start gap-3">
                   <div className="h-10 w-10 shrink-0 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-center font-extrabold text-slate-700">
                     {String(p.name || "P").trim().charAt(0).toUpperCase()}
                   </div>
                   <div className="min-w-0">
-                    <div className="font-semibold text-slate-900 truncate">{p.name}</div>
+                      <div className="font-semibold text-slate-900 truncate" title={p.name}>
+                        {truncate10(p.name)}
+                      </div>
                     <div className="text-xs text-slate-600">{p.qty} vendidos</div>
                   </div>
                 </div>
@@ -766,7 +725,10 @@ const DashboardAoVivo = () => {
                   <div className="font-extrabold text-slate-900">{formatBRLNoSpace(p.revenue)}</div>
                 </div>
               </div>
-            ))}
+              ))
+            ) : (
+              <div className="text-sm text-slate-500">Sem dados.</div>
+            )}
           </div>
         </Card>
 
@@ -824,6 +786,7 @@ const DashboardAoVivo = () => {
           <Card className="w-full border-slate-200 bg-white p-5">
           <div className="text-lg font-extrabold text-slate-900">Faturamento por marketplace</div>
           <div className="mt-3" style={{ height: 280 }}>
+            {pieByMarketplace.length ? (
             <ResponsivePie
               data={pieByMarketplace as any}
               margin={{ top: 10, right: 10, bottom: 10, left: 10 }}
@@ -851,6 +814,9 @@ const DashboardAoVivo = () => {
                 </div>
               )}
             />
+            ) : (
+              <div className="flex h-full items-center justify-center text-sm text-slate-500">Sem dados.</div>
+            )}
           </div>
           {channels.length ? (
             <div className="mt-2 text-xs text-slate-600">
@@ -867,6 +833,7 @@ const DashboardAoVivo = () => {
         <Card className="w-full border-slate-200 bg-white p-5 lg:col-span-6">
           <div className="text-lg font-extrabold text-slate-900">Faturamento por categoria</div>
           <div className="mt-3" style={{ height: 320 }}>
+            {pieByCategory.length ? (
             <ResponsiveBar
               data={pieByCategory.map((d) => ({ categoria: String(d.id), faturamento: Number(d.value) })) as any}
               keys={["faturamento"]}
@@ -904,6 +871,9 @@ const DashboardAoVivo = () => {
               }}
               onClick={(bar: any) => toggleSingle(setCategories, categories, String(bar?.indexValue ?? ""))}
             />
+            ) : (
+              <div className="flex h-full items-center justify-center text-sm text-slate-500">Sem dados.</div>
+            )}
           </div>
           {categories.length ? (
             <div className="mt-2 text-xs text-slate-600">
@@ -986,9 +956,6 @@ const DashboardAoVivo = () => {
             <MultiSelect label="Cidade" options={cityOptions} values={cities} onChange={setCities} placeholder="Todas" />
             {citiesLoading ? <div className="text-xs text-slate-600">Carregando cidades...</div> : null}
             {!citiesLoading && citiesError ? <div className="text-xs text-red-600">{citiesError}</div> : null}
-            <div className="pt-2 text-xs text-slate-600">
-              Placeholder: depois a gente liga isso nas queries reais (por enquanto só reescala os números fakes para demonstrar a interação).
-            </div>
           </div>
         ) : null}
       </SlideOver>

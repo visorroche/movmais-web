@@ -27,7 +27,23 @@ type FiltersResponse = {
   cities: string[];
 };
 
-type ProductOption = { id: number; sku: number; name: string | null; brand: string | null; model: string | null; category: string | null };
+type ProductOption = { id: number; sku: string; name: string | null; brand: string | null; model: string | null; category: string | null };
+
+type ItemsOverviewResponse = {
+  companyId: number;
+  groupId: number | null;
+  start: string;
+  end: string;
+  topFinalCategories: { final_category: string; revenue: string }[];
+  dailyByFinalCategory: { date: string; final_category: string; revenue: string }[];
+  categoryTotals: { category: string; revenue: string }[];
+  finalCategoryTotals: { category: string; final_category: string; revenue: string }[];
+  topProducts: { sku: string; name: string | null; qty: number; revenue: string }[];
+  byChannel: { channel: string; revenue: string }[];
+  byBrand: { brand: string; revenue: string }[];
+  byState: { state: string; revenue: string }[];
+  treemapRows: { category: string; subcategory: string; final_category: string; sku: string; name: string | null; revenue: string }[];
+};
 
 const DashboardItens = () => {
   const formatBRLNoSpace = (value: number): string =>
@@ -73,6 +89,10 @@ const DashboardItens = () => {
   const [productLoading, setProductLoading] = useState(false);
   const [productError, setProductError] = useState<string | null>(null);
   const [productQuery, setProductQuery] = useState("");
+
+  const [overviewLoading, setOverviewLoading] = useState(false);
+  const [overviewError, setOverviewError] = useState<string | null>(null);
+  const [overview, setOverview] = useState<ItemsOverviewResponse | null>(null);
 
   const [citiesOverride, setCitiesOverride] = useState<string[] | null>(null);
   const [citiesLoading, setCitiesLoading] = useState(false);
@@ -183,6 +203,44 @@ const DashboardItens = () => {
     return () => ac.abort();
   }, [filters, states]);
 
+  // Overview (todos os gráficos) — dados reais
+  useEffect(() => {
+    const start = String(dateRange.start || "").trim();
+    const end = String(dateRange.end || "").trim();
+    if (!start || !end) return;
+    const ac = new AbortController();
+
+    const qs = new URLSearchParams();
+    qs.set("start", start);
+    qs.set("end", end);
+    for (const id of stores) qs.append("company_id", id);
+    for (const s of status) qs.append("status", s);
+    for (const ch of channels) qs.append("channel", ch);
+    for (const c of categories) qs.append("category", c);
+    for (const st of states) qs.append("state", st);
+    for (const city of cities) qs.append("city", city);
+    for (const sku of productValues) qs.append("sku", sku);
+
+    setOverviewLoading(true);
+    setOverviewError(null);
+    fetch(buildApiUrl(`/companies/me/dashboard/items/overview?${qs.toString()}`), { headers: { ...getAuthHeaders() }, signal: ac.signal })
+      .then(async (res) => {
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error((data as any)?.message || "Erro ao carregar itens (overview)");
+        }
+        return res.json() as Promise<ItemsOverviewResponse>;
+      })
+      .then((d) => setOverview(d))
+      .catch((e: any) => {
+        setOverview(null);
+        setOverviewError(String(e?.message || "Erro ao carregar itens (overview)"));
+      })
+      .finally(() => setOverviewLoading(false));
+
+    return () => ac.abort();
+  }, [categories, channels, cities, dateRange.end, dateRange.start, productValues, status, states, stores]);
+
   const storeOptions: MultiSelectOption[] = useMemo(
     () => (filters?.stores || []).map((s) => ({ value: String(s.id), label: s.name })),
     [filters],
@@ -224,83 +282,36 @@ const DashboardItens = () => {
     else setter([next]);
   };
 
-  // Dados fakes determinísticos pra visual (depois liga no SQL)
-  const scale = useMemo(() => {
-    const key =
-      [...stores].sort().join("|") +
-      "||" +
-      [...channels].sort().join("|") +
-      "||" +
-      [...categories].sort().join("|") +
-      "||" +
-      [...productValues].sort().join("|");
-    if (!key) return 1;
-    let h = 0;
-    for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
-    const v = (h % 70) / 100; // 0..0.69
-    return 0.65 + v; // 0.65..1.34
-  }, [stores, channels, categories, productValues]);
-
   // barras: categorias e subcategorias
-  const categoryBars = useMemo(
-    () => [
-      { id: "Café", value: Math.round(42000 * scale) },
-      { id: "Acessórios", value: Math.round(27000 * scale) },
-      { id: "Máquinas", value: Math.round(31000 * scale) },
-      { id: "Chás", value: Math.round(14500 * scale) },
-      { id: "Cápsulas", value: Math.round(21500 * scale) },
-      { id: "Kits", value: Math.round(9800 * scale) },
-      { id: "Peças", value: Math.round(7600 * scale) },
-      { id: "Moedores", value: Math.round(13200 * scale) },
-      { id: "Canecas", value: Math.round(8900 * scale) },
-      { id: "Outros", value: Math.round(6100 * scale) },
-    ],
-    [scale],
-  );
+  const categoryBars = useMemo(() => {
+    const list = (overview?.categoryTotals || []).map((r) => ({ id: String(r.category), value: Number(r.revenue ?? 0) || 0 }));
+    return list;
+  }, [overview]);
 
   const [parentCategory, setParentCategory] = useState<string[]>([]);
   const activeParent = parentCategory.length === 1 ? parentCategory[0] : "";
 
   const subcategoryBars = useMemo(() => {
-    const base = [
-      { id: "Premium", value: 16000 },
-      { id: "Tradicional", value: 12000 },
-      { id: "Orgânico", value: 9000 },
-      { id: "Descafeinado", value: 6500 },
-      { id: "Gourmet", value: 11000 },
-      { id: "Acessórios", value: 7800 },
-      { id: "Peças", value: 5200 },
-      { id: "Filtros", value: 4300 },
-    ];
-    const k = activeParent || "Geral";
-    let h = 0;
-    for (let i = 0; i < k.length; i++) h = (h * 31 + k.charCodeAt(i)) >>> 0;
-    const bump = 0.75 + ((h % 60) / 100); // 0.75..1.34
-    return base.map((x) => ({ id: x.id, value: Math.max(1, Math.round(x.value * bump * scale)) }));
-  }, [activeParent, scale]);
+    const rows = (overview?.finalCategoryTotals || [])
+      .filter((r) => (activeParent ? String(r.category) === activeParent : true))
+      .map((r) => ({ id: String(r.final_category), value: Number(r.revenue ?? 0) || 0 }));
+    return rows;
+  }, [activeParent, overview]);
 
-  // top produtos (10)
-  const topProducts = useMemo(
-    () =>
-      [
-        { name: "Cápsulas Premium 10un", qty: 540, revenue: 16200 },
-        { name: "Filtro Reutilizável", qty: 210, revenue: 6300 },
-        { name: "Cafeteira Espresso X", qty: 120, revenue: 18400 },
-        { name: "Caneca Térmica 500ml", qty: 95, revenue: 4750 },
-        { name: "Moedor Elétrico", qty: 68, revenue: 9800 },
-        { name: "Kit Degustação", qty: 62, revenue: 5580 },
-        { name: "Café Especial 250g", qty: 58, revenue: 3480 },
-        { name: "Chá Matcha 100g", qty: 44, revenue: 3960 },
-        { name: "Balança Barista", qty: 31, revenue: 5270 },
-        { name: "Porta-cápsulas", qty: 28, revenue: 2240 },
-      ].map((p) => ({ ...p, qty: Math.max(1, Math.round(p.qty * scale)), revenue: Math.max(1, Math.round(p.revenue * scale)) })),
-    [scale],
-  );
+  const topProducts = useMemo(() => {
+    return (overview?.topProducts || []).map((p) => ({
+      name: String(p.name ?? p.sku),
+      qty: Number(p.qty ?? 0) || 0,
+      revenue: Number(p.revenue ?? 0) || 0,
+    }));
+  }, [overview]);
 
   const [productSort, setProductSort] = useState<{ key: "qty" | "revenue"; dir: "asc" | "desc" }>({
     key: "revenue",
     dir: "desc",
   });
+
+  const [treemapLevel, setTreemapLevel] = useState<"category" | "subcategory" | "final_category" | "product">("final_category");
 
   const sortedTopProducts = useMemo(() => {
     const list = [...topProducts];
@@ -314,16 +325,13 @@ const DashboardItens = () => {
     return list;
   }, [productSort, topProducts]);
 
-  // pizza marketplaces (igual AoVivo) + highlight 20%
-  const pieByMarketplace = useMemo(
-    () => [
-      { id: "Mercado Livre", label: "Mercado Livre", value: Math.round(38000 * scale) },
-      { id: "Shopee", label: "Shopee", value: Math.round(22000 * scale) },
-      { id: "Amazon", label: "Amazon", value: Math.round(16000 * scale) },
-      { id: "Magalu", label: "Magalu", value: Math.round(12000 * scale) },
-    ],
-    [scale],
-  );
+  const pieByMarketplace = useMemo(() => {
+    return (overview?.byChannel || []).map((r) => ({
+      id: String(r.channel),
+      label: String(r.channel),
+      value: Number(r.revenue ?? 0) || 0,
+    }));
+  }, [overview]);
   const marketplaceColorById = useMemo(() => {
     const map = new Map<string, string>();
     for (let i = 0; i < pieByMarketplace.length; i++) {
@@ -332,21 +340,11 @@ const DashboardItens = () => {
     return map;
   }, [pieByMarketplace]);
 
-  // marcas: bar chart
-  const brands = useMemo(
-    () => [
-      { id: "Nespresso", value: Math.round(22000 * scale) },
-      { id: "Três", value: Math.round(16000 * scale) },
-      { id: "Dolce Gusto", value: Math.round(14000 * scale) },
-      { id: "Melitta", value: Math.round(9800 * scale) },
-      { id: "Philips", value: Math.round(8700 * scale) },
-      { id: "Oster", value: Math.round(7600 * scale) },
-      { id: "Bialetti", value: Math.round(6800 * scale) },
-    ],
-    [scale],
-  );
+  const brands = useMemo(() => {
+    return (overview?.byBrand || []).map((r) => ({ id: String(r.brand), value: Number(r.revenue ?? 0) || 0 }));
+  }, [overview]);
 
-  // mapa (igual AoVivo)
+  // mapa por UF (faturamento)
   const mapWrapRef = useRef<HTMLDivElement | null>(null);
   const [mapWidth, setMapWidth] = useState(0);
   const mapHeight = 360;
@@ -383,37 +381,8 @@ const DashboardItens = () => {
   const mapPath = useMemo(() => (mapProjection ? geoPath(mapProjection) : null), [mapProjection]);
 
   const salesByUF = useMemo(() => {
-    const base: Record<string, number> = {
-      SP: 42000,
-      RJ: 18000,
-      MG: 22000,
-      PR: 12000,
-      RS: 14000,
-      SC: 9000,
-      BA: 8000,
-      GO: 7000,
-      DF: 6000,
-      PE: 6500,
-      CE: 5000,
-      PA: 4500,
-      AM: 3500,
-      MT: 3200,
-      MS: 2800,
-      ES: 2600,
-      RN: 2100,
-      PB: 1900,
-      AL: 1700,
-      SE: 1600,
-      PI: 1500,
-      MA: 1400,
-      TO: 1200,
-      RO: 1100,
-      AC: 800,
-      AP: 700,
-      RR: 650,
-    };
-    return Object.entries(base).map(([id, v]) => ({ id, value: Math.round(v * scale) }));
-  }, [scale]);
+    return (overview?.byState || []).map((r) => ({ id: String(r.state), value: Number(r.revenue ?? 0) || 0 }));
+  }, [overview]);
 
   const salesByUFMap = useMemo(() => new Map(salesByUF.map((d) => [String(d.id), d.value])), [salesByUF]);
   const mapMax = useMemo(() => Math.max(1, ...salesByUF.map((d) => d.value)), [salesByUF]);
@@ -424,25 +393,19 @@ const DashboardItens = () => {
   const mapScale = useMemo(() => scaleQuantize<string>().domain([0, mapMax]).range(MAP_ORANGE_TONES), [mapMax, MAP_ORANGE_TONES]);
   const mapUnknownColor = "#E2E8F0";
 
-  // linha: faturamento dia a dia com linhas por categoria
+  // linha: faturamento dia a dia (por final_category - top 6)
   const daySeries = useMemo(() => {
-    const start = dateRange.start ? new Date(dateRange.start + "T00:00:00") : new Date();
-    const end = dateRange.end ? new Date(dateRange.end + "T00:00:00") : new Date();
-    const days = Math.max(1, Math.min(31, Math.floor((end.getTime() - start.getTime()) / 86400000) + 1));
-    const cats = ["Café", "Acessórios", "Máquinas", "Cápsulas"];
-    const fmt = (d: Date) => `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`;
-    return cats.map((c, idx) => {
-      let base = 10000 + idx * 4000;
-      const data = Array.from({ length: days }, (_, i) => {
-        const d = new Date(start);
-        d.setDate(d.getDate() + i);
-        const wave = 0.65 + 0.35 * Math.sin((i / Math.max(1, days - 1)) * Math.PI * 1.6 + idx);
-        const v = Math.round(base * wave * scale);
-        return { x: fmt(d), y: v };
-      });
-      return { id: c, data };
-    });
-  }, [dateRange.end, dateRange.start, scale]);
+    const rows = overview?.dailyByFinalCategory || [];
+    const grouped = new Map<string, { x: string; y: number }[]>();
+    for (const r of rows) {
+      const cat = String((r as any).final_category ?? "");
+      const x = String((r as any).date ?? "");
+      const y = Number((r as any).revenue ?? 0) || 0;
+      if (!grouped.has(cat)) grouped.set(cat, []);
+      grouped.get(cat)!.push({ x, y });
+    }
+    return Array.from(grouped.entries()).map(([id, data]) => ({ id, data }));
+  }, [overview]);
 
   const lineColorById = useMemo(() => {
     const map = new Map<string, string>();
@@ -451,31 +414,59 @@ const DashboardItens = () => {
   }, [daySeries]);
 
   const treemapData = useMemo(() => {
-    // dados fake determinísticos: categorias -> subcategorias
-    const cats = [
-      { id: "Café", subs: ["Premium", "Tradicional", "Orgânico", "Gourmet", "Descafeinado"] },
-      { id: "Acessórios", subs: ["Filtros", "Canecas", "Porta-cápsulas", "Balanças", "Outros"] },
-      { id: "Máquinas", subs: ["Espresso", "Cápsulas", "Filtro", "Moedores", "Peças"] },
-      { id: "Chás", subs: ["Matcha", "Preto", "Verde", "Ervas", "Kits"] },
-      { id: "Cápsulas", subs: ["10un", "20un", "40un", "Variedades", "Acessórios"] },
-    ];
-
     const root: any = { name: "Categorias", children: [] as any[] };
-    for (let ci = 0; ci < cats.length; ci++) {
-      const c = cats[ci];
-      const children = c.subs.map((s, si) => {
-        const k = `${c.id}||${s}`;
-        let h = 0;
-        for (let i = 0; i < k.length; i++) h = (h * 31 + k.charCodeAt(i)) >>> 0;
-        const base = 9000 + (ci * 4200) + (si * 1500);
-        const wave = 0.7 + 0.3 * Math.sin((h % 20) / 3);
-        const value = Math.max(500, Math.round(base * wave * scale));
-        return { name: s, value };
-      });
-      root.children.push({ name: c.id, children });
+    type Row = { category: string; subcategory: string; final_category: string; sku: string; name: string | null; revenue: string };
+    const rows: Row[] = (overview?.treemapRows || []) as any;
+    const level = treemapLevel;
+
+    const getLeafName = (r: Row) => {
+      if (level === "product") return String(r.name ?? r.sku);
+      if (level === "final_category") return String(r.final_category);
+      if (level === "subcategory") return String(r.subcategory);
+      return String(r.category);
+    };
+
+    const addChild = (parent: any, name: string, value: number) => {
+      let child = (parent.children || []).find((c: any) => c.name === name);
+      if (!child) {
+        child = { name, children: [] as any[], value: 0 };
+        parent.children = parent.children || [];
+        parent.children.push(child);
+      }
+      child.value = (child.value || 0) + value;
+      return child;
+    };
+
+    for (const r of rows) {
+      const value = Number((r as any).revenue ?? 0) || 0;
+      const category = String((r as any).category ?? "(sem categoria)");
+      const subcategory = String((r as any).subcategory ?? "(sem sub-categoria)");
+      const finalCat = String((r as any).final_category ?? "(sem categoria)");
+      const product = String((r as any).name ?? (r as any).sku ?? "(sem sku)");
+
+      if (level === "category") {
+        addChild(root, category, value);
+        continue;
+      }
+
+      const catNode = addChild(root, category, value);
+      if (level === "subcategory") {
+        addChild(catNode, subcategory, value);
+        continue;
+      }
+
+      const subNode = addChild(catNode, subcategory, value);
+      if (level === "final_category") {
+        addChild(subNode, finalCat, value);
+        continue;
+      }
+
+      const finNode = addChild(subNode, finalCat, value);
+      addChild(finNode, product, value);
     }
+
     return root;
-  }, [scale]);
+  }, [overview, treemapLevel]);
 
   return (
     <div className="w-full">
@@ -505,12 +496,14 @@ const DashboardItens = () => {
         </div>
       </div>
 
-      {filtersLoading || filtersError || productLoading || productError ? (
+      {filtersLoading || filtersError || productLoading || productError || overviewLoading || overviewError ? (
         <div className="mt-2 space-y-1">
           {filtersLoading ? <div className="text-sm text-slate-700">Carregando filtros...</div> : null}
           {!filtersLoading && filtersError ? <div className="text-sm text-red-600">{filtersError}</div> : null}
           {productLoading ? <div className="text-xs text-slate-600">Buscando produtos...</div> : null}
           {!productLoading && productError ? <div className="text-xs text-red-600">{productError}</div> : null}
+          {overviewLoading ? <div className="text-sm text-slate-700">Carregando dados de itens...</div> : null}
+          {!overviewLoading && overviewError ? <div className="text-sm text-red-600">{overviewError}</div> : null}
         </div>
       ) : null}
 
@@ -555,8 +548,54 @@ const DashboardItens = () => {
 
       {/* TreeMap: categorias e subcategorias */}
       <Card className="mt-4 w-full border-slate-200 bg-white p-5">
-        <div className="text-lg font-extrabold text-slate-900">Categorias e subcategorias</div>
-        <div className="mt-1 text-sm text-slate-600">Área proporcional ao faturamento (fake) por subcategoria.</div>
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <div className="text-lg font-extrabold text-slate-900">Categorias e subcategorias</div>
+            <div className="mt-1 text-sm text-slate-600">Hierarquia: Categoria → Sub-categoria → Categoria Final → Produto</div>
+          </div>
+          <div className="inline-flex overflow-hidden rounded-xl border border-slate-200 bg-white">
+            <button
+              type="button"
+              onClick={() => setTreemapLevel("category")}
+              className={[
+                "px-3 py-1.5 text-sm font-semibold",
+                treemapLevel === "category" ? "bg-slate-900 text-white" : "bg-white text-slate-700 hover:bg-slate-50",
+              ].join(" ")}
+            >
+              Categoria
+            </button>
+            <button
+              type="button"
+              onClick={() => setTreemapLevel("subcategory")}
+              className={[
+                "px-3 py-1.5 text-sm font-semibold border-l border-slate-200",
+                treemapLevel === "subcategory" ? "bg-slate-900 text-white" : "bg-white text-slate-700 hover:bg-slate-50",
+              ].join(" ")}
+            >
+              Sub-cat.
+            </button>
+            <button
+              type="button"
+              onClick={() => setTreemapLevel("final_category")}
+              className={[
+                "px-3 py-1.5 text-sm font-semibold border-l border-slate-200",
+                treemapLevel === "final_category" ? "bg-slate-900 text-white" : "bg-white text-slate-700 hover:bg-slate-50",
+              ].join(" ")}
+            >
+              Cat. final
+            </button>
+            <button
+              type="button"
+              onClick={() => setTreemapLevel("product")}
+              className={[
+                "px-3 py-1.5 text-sm font-semibold border-l border-slate-200",
+                treemapLevel === "product" ? "bg-slate-900 text-white" : "bg-white text-slate-700 hover:bg-slate-50",
+              ].join(" ")}
+            >
+              Produto
+            </button>
+          </div>
+        </div>
         <div className="mt-3" style={{ height: 420 }}>
           <ResponsiveTreeMap
             data={treemapData as any}
@@ -564,13 +603,17 @@ const DashboardItens = () => {
             value="value"
             margin={{ top: 8, right: 8, bottom: 8, left: 8 }}
             label={(node: any) => {
-              // mostrar sempre o nome da CATEGORIA nas áreas (não o valor)
-              // folhas (subcategorias) exibem o nome do pai (categoria)
-              const depth = Number(node?.depth ?? 0);
-              if (depth >= 2) return String(node?.parent?.data?.name ?? node?.parent?.id ?? "");
-              return String(node?.data?.name ?? node?.id ?? "");
+              // Garante rótulo nas "últimas áreas" (folhas): sempre mostra o id do nó folha.
+              const hasChildren = Array.isArray((node as any)?.children) && (node as any).children.length > 0;
+              if (!hasChildren) {
+                const full = String(node?.id ?? "");
+                // Limita para 10 caracteres no label (incluindo "...")
+                if (full.length > 10) return `${full.slice(0, 7)}...`;
+                return full;
+              }
+              return "";
             }}
-            labelSkipSize={14}
+            labelSkipSize={treemapLevel === "product" ? 6 : treemapLevel === "final_category" ? 10 : 14}
             labelTextColor="#0f172a"
             parentLabelTextColor="#0f172a"
             parentLabelSize={14}
@@ -704,7 +747,7 @@ const DashboardItens = () => {
                       }
                       className="inline-flex items-center gap-2 hover:text-slate-900"
                     >
-                      Quantidade
+                      Qtd.
                       <span className="text-slate-400">{productSort.key === "qty" ? (productSort.dir === "asc" ? "▲" : "▼") : ""}</span>
                     </button>
                   </th>
@@ -732,11 +775,13 @@ const DashboardItens = () => {
                   <tr key={p.name} className="border-t border-slate-200">
                     <td className="px-4 py-3">
                       <div className="min-w-0">
-                        <div className="font-semibold text-slate-900 truncate">{p.name}</div>
+                        <div className="font-semibold text-slate-900 truncate text-[11px]" title={String(p.name || "")}>
+                          {String(p.name || "").length > 50 ? `${String(p.name).slice(0, 50)}...` : String(p.name)}
+                        </div>
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-right font-extrabold text-slate-900 tabular-nums">{p.qty}</td>
-                    <td className="px-4 py-3 text-right font-extrabold text-slate-900 tabular-nums">{formatBRLNoSpace(p.revenue)}</td>
+                    <td className="px-4 py-3 text-right text-slate-900 tabular-nums">{p.qty}</td>
+                    <td className="px-4 py-3 text-right text-slate-900 tabular-nums">{formatBRLNoSpace(p.revenue)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -898,9 +943,7 @@ const DashboardItens = () => {
             <MultiSelect label="Cidade" options={cityOptions} values={cities} onChange={setCities} placeholder="Todas" />
             {citiesLoading ? <div className="text-xs text-slate-600">Carregando cidades...</div> : null}
             {!citiesLoading && citiesError ? <div className="text-xs text-red-600">{citiesError}</div> : null}
-            <div className="pt-2 text-xs text-slate-600">
-              Placeholder: depois a gente liga isso nas queries reais (por enquanto só reescala números fakes para demonstrar a interação).
-            </div>
+            <div className="pt-2 text-xs text-slate-600">Os filtros desta tela afetam os gráficos usando orders + order_items + products.</div>
           </div>
         ) : null}
       </SlideOver>

@@ -3,7 +3,7 @@ import { NavLink, Navigate, Outlet, useLocation } from "react-router-dom";
 import { fetchMyCompanies, getActiveCompanyId, getAuthHeaders, getMe, getStoredUser, getToken, logout, setActiveCompanyId, type CompanyAccess, type UserMe } from "@/lib/auth";
 import logo from "@/assets/logo.png";
 import { Button } from "@/components/ui/button";
-import { LayoutDashboard, Users, ClipboardList, Settings, ChevronDown, ChevronRight, LogOut, PanelLeftClose, Plus, Package } from "lucide-react";
+import { LayoutDashboard, Users, ClipboardList, Settings, ChevronDown, ChevronRight, LogOut, PanelLeftClose, Plus, Package, ScrollText } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { buildApiUrl } from "@/lib/config";
@@ -324,6 +324,7 @@ const AreaLogada = () => {
             <SidebarLink to="/clientes" icon={<Users className="h-5 w-5" />} label="Clientes" collapsed={collapsed} />
             <SidebarLink to="/pedidos" icon={<ClipboardList className="h-5 w-5" />} label="Pedidos" collapsed={collapsed} />
             <SidebarLink to="/produtos" icon={<Package className="h-5 w-5" />} label="Produtos" collapsed={collapsed} />
+            <SidebarLink to="/logs-integracoes" icon={<ScrollText className="h-5 w-5" />} label="Log de Integrações" collapsed={collapsed} />
 
             {/* Configurações (submenu) */}
             {collapsed ? (

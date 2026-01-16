@@ -3,7 +3,6 @@ import { useNavigate, useOutletContext, useSearchParams } from "react-router-dom
 import { Card } from "@/components/ui/card";
 import type { AreaLogadaOutletContext } from "@/pages/AreaLogada";
 import { ResponsiveLine } from "@nivo/line";
-import { line as d3Line } from "d3-shape";
 import { buildApiUrl } from "@/lib/config";
 import { getAuthHeaders } from "@/lib/auth";
 import { MultiSelect, type MultiSelectOption } from "@/components/ui/multi-select";
@@ -35,7 +34,20 @@ const Dashboard = () => {
     cities: string[];
   };
 
-  type ProductOption = { id: number; sku: number; name: string | null; brand: string | null; model: string | null; category: string | null };
+  type ProductOption = { id: number; sku: string; name: string | null; brand: string | null; model: string | null; category: string | null };
+
+  type RevenueResponse = {
+    companyId: number;
+    groupId: number | null;
+    start: string;
+    end: string;
+    today: number;
+    period: number;
+    ordersCount: number;
+    quotesCount: number;
+    conversionRate: number; // ordersCount / quotesCount (0..1)
+    daily: { date: string; total: number }[];
+  };
 
   const [filtersLoading, setFiltersLoading] = useState(true);
   const [filtersError, setFiltersError] = useState<string | null>(null);
@@ -108,6 +120,57 @@ const Dashboard = () => {
     if (start || end) setDateRange({ start, end });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const [revenueLoading, setRevenueLoading] = useState(false);
+  const [revenueError, setRevenueError] = useState<string | null>(null);
+  const [todayRevenue, setTodayRevenue] = useState<number>(0);
+  const [periodRevenue, setPeriodRevenue] = useState<number>(0);
+  const [dailyRevenue, setDailyRevenue] = useState<{ date: string; total: number }[]>([]);
+  const [ordersCount, setOrdersCount] = useState<number>(0);
+  const [quotesCount, setQuotesCount] = useState<number>(0);
+  const [conversionRate, setConversionRate] = useState<number>(0);
+
+  useEffect(() => {
+    const ac = new AbortController();
+    const start = String(dateRange.start || "").trim();
+    const end = String(dateRange.end || "").trim();
+    if (!start || !end) return;
+
+    setRevenueLoading(true);
+    setRevenueError(null);
+    fetch(buildApiUrl(`/companies/me/dashboard/revenue?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`), {
+      headers: { ...getAuthHeaders() },
+      signal: ac.signal,
+    })
+      .then(async (res) => {
+        if (res.status === 401) throw new Error("Não autenticado");
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error((data as any)?.message || "Erro ao carregar faturamento");
+        }
+        return res.json() as Promise<RevenueResponse>;
+      })
+      .then((d) => {
+        setTodayRevenue(Number(d.today || 0));
+        setPeriodRevenue(Number(d.period || 0));
+        setDailyRevenue(Array.isArray(d.daily) ? d.daily : []);
+        setOrdersCount(Number(d.ordersCount || 0));
+        setQuotesCount(Number(d.quotesCount || 0));
+        setConversionRate(Number(d.conversionRate || 0));
+      })
+      .catch((e: any) => {
+        setTodayRevenue(0);
+        setPeriodRevenue(0);
+        setDailyRevenue([]);
+        setOrdersCount(0);
+        setQuotesCount(0);
+        setConversionRate(0);
+        setRevenueError(String(e?.message || "Erro ao carregar faturamento"));
+      })
+      .finally(() => setRevenueLoading(false));
+
+    return () => ac.abort();
+  }, [dateRange.start, dateRange.end]);
 
   useEffect(() => {
     const ac = new AbortController();
@@ -288,74 +351,28 @@ const Dashboard = () => {
   const lastMonthDays = new Date(now.getFullYear(), now.getMonth(), 0).getDate();
 
   const monthLineData = useMemo(() => {
+    const toDate = (ymd: string) => {
+      const [y, m, d] = ymd.split("-").map((x) => Number(x));
+      return new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0);
+    };
     const pad2 = (n: number) => String(n).padStart(2, "0");
-    const labels = Array.from({ length: curMonthDays }, (_, i) => pad2(i + 1));
+    const fmtBr = (dt: Date) => `${pad2(dt.getDate())}/${pad2(dt.getMonth() + 1)}/${dt.getFullYear()}`;
 
-    // Base (fake) do mês anterior: série diária com tendência + ondulação
-    const lastDaily = Array.from({ length: lastMonthDays }, (_, i) => {
-      const day = i + 1;
-      const trend = 1 + day / Math.max(1, lastMonthDays) * 0.35; // cresce ao longo do mês
-      const wave = 0.85 + 0.15 * Math.sin((day / 6) * Math.PI); // pequenas variações
-      const base = 4200;
-      return Math.max(0, Math.round(base * trend * wave));
-    });
+    const start = dateRange.start ? toDate(dateRange.start) : null;
+    const end = dateRange.end ? toDate(dateRange.end) : null;
+    if (!start || !end) return [{ id: "Faturamento", data: [] }];
 
-    // Cumulativo do mês anterior (para servir de "inclinação")
-    const lastCum = lastDaily.reduce<number[]>((acc, v, idx) => {
-      const prev = idx ? acc[idx - 1] : 0;
-      acc.push(prev + v);
-      return acc;
-    }, []);
+    const byDay = new Map<string, number>();
+    for (const r of dailyRevenue) byDay.set(String(r.date), Number(r.total || 0));
 
-    // "Fato" até hoje no mês atual: mesmo formato do mês anterior, mas escalado (e pequeno ruído)
-    const sameDayIdx = Math.min(todayDay, lastCum.length) - 1;
-    const lastSoFar = Math.max(1, lastCum[sameDayIdx] ?? lastCum[lastCum.length - 1] ?? 1);
-    const factor = 1.08; // placeholder: crescimento do mês atual vs. último mês (depois liga em dados reais)
-    const curSoFarTarget = Math.round(lastSoFar * factor);
+    const points: { x: string; y: number }[] = [];
+    for (let d = new Date(start.getTime()); d.getTime() <= end.getTime(); d.setDate(d.getDate() + 1)) {
+      const key = fmtBr(d); // DD/MM/YYYY (mesmo formato vindo da API)
+      points.push({ x: key, y: byDay.get(key) ?? 0 });
+    }
 
-    // Faz uma curva base do mês atual usando o cumulativo do mês anterior como shape,
-    // e escala pela performance até hoje.
-    const scaleToSoFar = curSoFarTarget / lastSoFar;
-    const curCum = Array.from({ length: curMonthDays }, (_, i) => {
-      const day = i + 1;
-      const refIdx = Math.min(day, lastMonthDays) - 1;
-      const ref = lastCum[refIdx] ?? lastCum[lastCum.length - 1] ?? 0;
-      const raw = ref * scaleToSoFar;
-      // ruído só no trecho "já passado"
-      if (day <= todayDay) {
-        const jitter = 1 + (Math.sin(day * 1.7) * 0.01); // ±1%
-        return Math.round(raw * jitter);
-      }
-      return Math.round(raw);
-    });
-
-    const curActual = labels.map((x, i) => ({ x, y: i + 1 <= todayDay ? curCum[i] : null }));
-    const curProjection = labels.map((x, i) => ({ x, y: i + 1 >= todayDay ? curCum[i] : null }));
-
-    // Mês anterior: ajusta para o mesmo eixo X (1..curMonthDays), truncando/repetindo último valor se necessário
-    const lastSeries = labels.map((x, i) => {
-      const refIdx = Math.min(i, lastCum.length - 1);
-      return { x, y: lastCum[refIdx] ?? lastCum[lastCum.length - 1] ?? 0 };
-    });
-
-    return [
-      { id: "Mês atual", data: curActual.filter((p: any) => p.y !== null) },
-      { id: "Mês atual (projeção)", data: curProjection.filter((p: any) => p.y !== null) },
-      { id: "Último mês", data: lastSeries },
-    ];
-  }, [curMonthDays, lastMonthDays, todayDay]);
-
-  const dashedProjectionLayer = (props: any) => {
-    const serie = props.series?.find((s: any) => s.id === "Mês atual (projeção)");
-    if (!serie) return null;
-    const pts = (serie.data || []).map((d: any) => d.position);
-    const gen = d3Line<any>()
-      .x((d) => d.x)
-      .y((d) => d.y);
-    const d = gen(pts);
-    if (!d) return null;
-    return <path d={d} fill="none" stroke={CHART_COLORS[6]} strokeWidth={2.5} strokeDasharray="6 6" opacity={0.95} />;
-  };
+    return [{ id: "Faturamento", data: points }];
+  }, [dailyRevenue, dateRange.start, dateRange.end]);
 
   return (
     <div className="w-full">
@@ -382,6 +399,8 @@ const Dashboard = () => {
           {meError ? <div className="text-sm text-red-600">{meError}</div> : null}
           {filtersLoading ? <div className="text-sm text-slate-700">Carregando filtros...</div> : null}
           {!filtersLoading && filtersError ? <div className="text-sm text-red-600">{filtersError}</div> : null}
+          {revenueLoading ? <div className="text-sm text-slate-700">Carregando faturamento...</div> : null}
+          {!revenueLoading && revenueError ? <div className="text-sm text-red-600">{revenueError}</div> : null}
           {productLoading ? <div className="text-xs text-slate-600">Buscando produtos...</div> : null}
           {!productLoading && productError ? <div className="text-xs text-red-600">{productError}</div> : null}
         </div>
@@ -399,7 +418,7 @@ const Dashboard = () => {
               AO VIVO
             </div>
           </div>
-          <div className="mt-2 text-3xl font-extrabold text-slate-900">R$ 12.345,67</div>
+          <div className="mt-2 text-3xl font-extrabold text-slate-900">{formatBRLNoSpace(todayRevenue)}</div>
           <button
             type="button"
             onClick={() => navigate("/dashboard/ao-vivo")}
@@ -411,7 +430,7 @@ const Dashboard = () => {
 
         <Card className="w-full border-slate-200 bg-white p-5">
           <div className="text-sm font-semibold text-slate-600">Faturado do período</div>
-          <div className="mt-2 text-3xl font-extrabold text-slate-900">R$ 98.765,43</div>
+          <div className="mt-2 text-3xl font-extrabold text-slate-900">{formatBRLNoSpace(periodRevenue)}</div>
           <button
             type="button"
             onClick={() => navigate("/dashboard/itens")}
@@ -424,13 +443,17 @@ const Dashboard = () => {
         <Card className="w-full border-slate-200 bg-white p-5">
           <div className="text-sm font-semibold text-slate-600">Taxa de conversão</div>
           <div className="mt-2 flex items-start justify-between gap-4">
-            <div className="text-3xl font-extrabold text-slate-900">18,4%</div>
+            <div className="text-3xl font-extrabold text-slate-900">
+              {new Intl.NumberFormat("pt-BR", { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(
+                Number.isFinite(conversionRate) ? conversionRate : 0,
+              )}
+            </div>
             <div className="text-sm text-slate-700 text-left">
               <div>
-                <span className="font-extrabold text-slate-900">1.240</span> simulações
+                <span className="font-extrabold text-slate-900">{quotesCount}</span> simulações
               </div>
               <div>
-                <span className="font-extrabold text-slate-900">228</span> pedidos
+                <span className="font-extrabold text-slate-900">{ordersCount}</span> pedidos
               </div>
             </div>
           </div>
@@ -444,30 +467,23 @@ const Dashboard = () => {
         </Card>
       </div>
 
-      {/* Linha do faturamento: mês atual vs último mês + projeção */}
+      {/* Linha do faturamento: dados reais do período */}
       <Card className="mt-4 w-full border-slate-200 bg-white p-5">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="text-lg font-extrabold text-slate-900">Faturamento dia a dia (mês atual vs último mês)</div>
+          <div className="text-lg font-extrabold text-slate-900">Faturamento dia a dia</div>
           <div className="text-xs text-slate-600">
-            Mês atual:{" "}
+            {/* Período:{" "}
             <span className="font-extrabold text-slate-900">
-              {curMonthStart.toLocaleDateString("pt-BR")} – {now.toLocaleDateString("pt-BR")}
-            </span>
+              {dateRange.start ? new Date(`${dateRange.start}T00:00:00`).toLocaleDateString("pt-BR") : "—"} –{" "}
+              {dateRange.end ? new Date(`${dateRange.end}T00:00:00`).toLocaleDateString("pt-BR") : "—"}
+            </span> */}
           </div>
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
           <div className="inline-flex items-center gap-2 text-slate-700">
             <span className="h-2.5 w-2.5 rounded-full" style={{ background: CHART_COLORS[1] }} />
-            <span className="font-semibold">Mês atual</span>
-          </div>
-          <div className="inline-flex items-center gap-2 text-slate-700">
-            <span className="h-2.5 w-2.5 rounded-full" style={{ background: CHART_COLORS[6] }} />
-            <span className="font-semibold">Mês atual (projeção)</span>
-          </div>
-          <div className="inline-flex items-center gap-2 text-slate-700">
-            <span className="h-2.5 w-2.5 rounded-full" style={{ background: CHART_COLORS[0] }} />
-            <span className="font-semibold">Último mês</span>
+            <span className="font-semibold">Faturamento</span>
           </div>
         </div>
 
@@ -479,7 +495,7 @@ const Dashboard = () => {
             yScale={{ type: "linear", min: 0, max: "auto", stacked: false }}
             axisBottom={{
               tickRotation: -45,
-              legend: "Dia do mês",
+              legend: "",
               legendOffset: 46,
               legendPosition: "middle",
             }}
@@ -490,9 +506,8 @@ const Dashboard = () => {
             useMesh={true}
             colors={(d) => {
               const id = String(d.id);
-              if (id === "Mês atual") return CHART_COLORS[1];
-              if (id === "Mês atual (projeção)") return "transparent"; // desenhado via layer pontilhada
-              return CHART_COLORS[0]; // último mês
+              if (id === "Faturamento") return CHART_COLORS[1];
+              return CHART_COLORS[1];
             }}
             legends={[]}
             theme={{
@@ -500,7 +515,7 @@ const Dashboard = () => {
               grid: { line: { stroke: "#E2E8F0" } },
               tooltip: { container: { background: "#fff", color: "#0f172a", fontSize: 12, borderRadius: 12 } },
             }}
-            layers={["grid", "markers", "areas", "lines", dashedProjectionLayer, "slices", "axes"]}
+            layers={["grid", "markers", "areas", "lines", "slices", "axes"]}
             tooltip={({ point }: any) => (
               <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 shadow-xl">
                 <div className="font-extrabold">{String(point?.serieId)}</div>
@@ -511,9 +526,9 @@ const Dashboard = () => {
           />
         </div>
 
-        <div className="mt-2 text-xs text-slate-600">
-          Projeção: segue a mesma “inclinação” do mês anterior, escalada pelo desempenho até o dia {String(todayDay).padStart(2, "0")}.
-        </div>
+        {!dailyRevenue.length && !revenueLoading ? (
+          <div className="mt-2 text-xs text-slate-600">Sem dados no período selecionado.</div>
+        ) : null}
       </Card>
 
       <SlideOver open={filtersOpen} title="Filtros" onClose={() => setFiltersOpen(false)}>

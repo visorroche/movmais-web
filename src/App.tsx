@@ -9,6 +9,7 @@ import DashboardSimulacoes from "@/pages/dashboard/Simulacoes";
 import Clientes from "@/pages/Clientes";
 import Pedidos from "@/pages/Pedidos";
 import Produtos from "@/pages/Produtos";
+import LogIntegracoes from "@/pages/LogIntegracoes";
 import ConfigUsuarios from "@/pages/configuracoes/Usuarios";
 import ConfigEmpresa from "@/pages/configuracoes/Empresa";
 import ConfigPlataformas from "@/pages/configuracoes/Plataformas";
@@ -32,6 +33,7 @@ const App = () => {
             <Route path="/clientes" element={<Clientes />} />
             <Route path="/pedidos" element={<Pedidos />} />
             <Route path="/produtos" element={<Produtos />} />
+            <Route path="/logs-integracoes" element={<LogIntegracoes />} />
             <Route path="/configuracoes/usuarios" element={<ConfigUsuarios />} />
             <Route path="/configuracoes/empresa" element={<ConfigEmpresa />} />
             <Route path="/configuracoes/plataformas" element={<ConfigPlataformas />} />

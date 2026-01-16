@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { ResponsiveLine } from "@nivo/line";
-import { ResponsiveSankey } from "@nivo/sankey";
 import { ResponsiveScatterPlot } from "@nivo/scatterplot";
 import { geoMercator, geoPath } from "d3-geo";
 import { scaleQuantize } from "d3-scale";
@@ -26,7 +25,38 @@ type FiltersResponse = {
   cities: string[];
 };
 
-type ProductOption = { id: number; sku: number; name: string | null; brand: string | null; model: string | null; category: string | null };
+type ProductOption = { id: number; sku: string; name: string | null; brand: string | null; model: string | null; category: string | null };
+
+type SimsDailyResponse = {
+  companyId: number;
+  groupId: number | null;
+  start: string;
+  end: string;
+  daily: { date: string; sims: number; orders: number }[];
+};
+
+type SimsByStateResponse = {
+  companyId: number;
+  groupId: number | null;
+  start: string;
+  end: string;
+  states: { state: string; sims: number; orders: number; conversion: number }[];
+};
+
+type FreightScatterPoint = {
+  rangeValue: string;
+  rangeDeadline: string;
+  total: number;
+  orders: number;
+  conversion: number;
+};
+type FreightScatterResponse = {
+  companyId: number;
+  groupId: number | null;
+  start: string;
+  end: string;
+  points: FreightScatterPoint[];
+};
 
 function pad2(n: number) {
   return String(n).padStart(2, "0");
@@ -69,12 +99,9 @@ const DashboardSimulacoes = () => {
   const [filtersError, setFiltersError] = useState<string | null>(null);
   const [filters, setFilters] = useState<FiltersResponse | null>(null);
 
-  const [status, setStatus] = useState<string[]>([]);
   const [stores, setStores] = useState<string[]>([]);
   const [channels, setChannels] = useState<string[]>([]);
-  const [categories, setCategories] = useState<string[]>([]);
   const [states, setStates] = useState<string[]>([]);
-  const [cities, setCities] = useState<string[]>([]);
 
   const [productValues, setProductValues] = useState<string[]>([]);
   const [productOptions, setProductOptions] = useState<ProductOption[]>([]);
@@ -82,9 +109,17 @@ const DashboardSimulacoes = () => {
   const [productError, setProductError] = useState<string | null>(null);
   const [productQuery, setProductQuery] = useState("");
 
-  const [citiesOverride, setCitiesOverride] = useState<string[] | null>(null);
-  const [citiesLoading, setCitiesLoading] = useState(false);
-  const [citiesError, setCitiesError] = useState<string | null>(null);
+  const [dailyLoading, setDailyLoading] = useState(false);
+  const [dailyError, setDailyError] = useState<string | null>(null);
+  const [dailySeries, setDailySeries] = useState<{ date: string; sims: number; orders: number }[]>([]);
+
+  const [freightScatterLoading, setFreightScatterLoading] = useState(false);
+  const [freightScatterError, setFreightScatterError] = useState<string | null>(null);
+  const [freightScatterPoints, setFreightScatterPoints] = useState<FreightScatterPoint[]>([]);
+
+  const [stateLoading, setStateLoading] = useState(false);
+  const [stateError, setStateError] = useState<string | null>(null);
+  const [stateSeries, setStateSeries] = useState<{ state: string; sims: number; orders: number; conversion: number }[]>([]);
 
   const initialStoresSet = useRef(false);
 
@@ -92,7 +127,7 @@ const DashboardSimulacoes = () => {
     const ac = new AbortController();
     setFiltersLoading(true);
     setFiltersError(null);
-    fetch(buildApiUrl("/companies/me/dashboard/filters"), { headers: { ...getAuthHeaders() }, signal: ac.signal })
+    fetch(buildApiUrl("/companies/me/dashboard/filters?channelsFrom=freight_quotes"), { headers: { ...getAuthHeaders() }, signal: ac.signal })
       .then(async (res) => {
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
@@ -153,67 +188,134 @@ const DashboardSimulacoes = () => {
     };
   }, [productQuery]);
 
+  // Série diária real (simulações e pedidos) — mesma lógica do Dashboard (company/grupo + período).
   useEffect(() => {
-    if (!filters) return;
-    if (!states.length) {
-      setCitiesOverride(null);
-      setCitiesError(null);
-      setCitiesLoading(false);
-      return;
-    }
     const ac = new AbortController();
-    setCitiesLoading(true);
-    setCitiesError(null);
+    const start = String(dateRange.start || "").trim();
+    const end = String(dateRange.end || "").trim();
+    if (!start || !end) return;
+
     const qs = new URLSearchParams();
+    qs.set("start", start);
+    qs.set("end", end);
+    for (const ch of channels) qs.append("channel", ch);
     for (const st of states) qs.append("state", st);
-    fetch(buildApiUrl(`/companies/me/dashboard/cities?${qs.toString()}`), {
+    for (const sku of productValues) qs.append("sku", sku);
+    for (const id of stores) qs.append("company_id", id);
+
+    setDailyLoading(true);
+    setDailyError(null);
+    fetch(buildApiUrl(`/companies/me/dashboard/simulations/daily?${qs.toString()}`), {
       headers: { ...getAuthHeaders() },
       signal: ac.signal,
     })
       .then(async (res) => {
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
-          throw new Error((data as any)?.message || "Erro ao carregar cidades");
+          throw new Error((data as any)?.message || "Erro ao carregar simulações");
         }
-        return res.json() as Promise<string[]>;
+        return res.json() as Promise<SimsDailyResponse>;
       })
-      .then((list) => {
-        const next = Array.isArray(list) ? list : [];
-        setCitiesOverride(next);
-        setCities((cur) => cur.filter((c) => next.includes(c)));
-      })
+      .then((d) => setDailySeries(Array.isArray(d?.daily) ? d.daily : []))
       .catch((e: any) => {
-        setCitiesOverride([]);
-        setCitiesError(String(e?.message || "Erro ao carregar cidades"));
+        setDailySeries([]);
+        setDailyError(String(e?.message || "Erro ao carregar simulações"));
       })
-      .finally(() => setCitiesLoading(false));
+      .finally(() => setDailyLoading(false));
 
     return () => ac.abort();
-  }, [filters, states]);
+  }, [channels, dateRange.start, dateRange.end, productValues, states, stores]);
+
+  // Scatter (frete × prazo) — dados reais
+  useEffect(() => {
+    const ac = new AbortController();
+    const start = String(dateRange.start || "").trim();
+    const end = String(dateRange.end || "").trim();
+    if (!start || !end) return;
+
+    const qs = new URLSearchParams();
+    qs.set("start", start);
+    qs.set("end", end);
+    qs.set("limit", "800");
+    for (const ch of channels) qs.append("channel", ch);
+    for (const st of states) qs.append("state", st);
+    for (const sku of productValues) qs.append("sku", sku);
+    for (const id of stores) qs.append("company_id", id);
+
+    setFreightScatterLoading(true);
+    setFreightScatterError(null);
+    fetch(buildApiUrl(`/companies/me/dashboard/simulations/freight-scatter?${qs.toString()}`), {
+      headers: { ...getAuthHeaders() },
+      signal: ac.signal,
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error((data as any)?.message || "Erro ao carregar mapa de conversão");
+        }
+        return res.json() as Promise<FreightScatterResponse>;
+      })
+      .then((d) => setFreightScatterPoints(Array.isArray(d?.points) ? d.points : []))
+      .catch((e: any) => {
+        setFreightScatterPoints([]);
+        setFreightScatterError(String(e?.message || "Erro ao carregar mapa de conversão"));
+      })
+      .finally(() => setFreightScatterLoading(false));
+
+    return () => ac.abort();
+  }, [channels, dateRange.start, dateRange.end, productValues, states, stores]);
+
+  // Mapa por estado — dados reais (freight_quotes.destination_state)
+  useEffect(() => {
+    const ac = new AbortController();
+    const start = String(dateRange.start || "").trim();
+    const end = String(dateRange.end || "").trim();
+    if (!start || !end) return;
+
+    const qs = new URLSearchParams();
+    qs.set("start", start);
+    qs.set("end", end);
+    for (const ch of channels) qs.append("channel", ch);
+    for (const st of states) qs.append("state", st);
+    for (const sku of productValues) qs.append("sku", sku);
+    for (const id of stores) qs.append("company_id", id);
+
+    setStateLoading(true);
+    setStateError(null);
+    fetch(buildApiUrl(`/companies/me/dashboard/simulations/by-state?${qs.toString()}`), {
+      headers: { ...getAuthHeaders() },
+      signal: ac.signal,
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error((data as any)?.message || "Erro ao carregar mapa por estado");
+        }
+        return res.json() as Promise<SimsByStateResponse>;
+      })
+      .then((d) => setStateSeries(Array.isArray(d?.states) ? d.states : []))
+      .catch((e: any) => {
+        setStateSeries([]);
+        setStateError(String(e?.message || "Erro ao carregar mapa por estado"));
+      })
+      .finally(() => setStateLoading(false));
+
+    return () => ac.abort();
+  }, [channels, dateRange.start, dateRange.end, productValues, states, stores]);
+
+  // cidades removidas (filtro não será exibido nesta tela)
 
   const storeOptions: MultiSelectOption[] = useMemo(
     () => (filters?.stores || []).map((s) => ({ value: String(s.id), label: s.name })),
-    [filters],
-  );
-  const statusOptions: MultiSelectOption[] = useMemo(
-    () => (filters?.statuses || []).map((s) => ({ value: s, label: s })),
     [filters],
   );
   const channelOptions: MultiSelectOption[] = useMemo(
     () => (filters?.channels || []).map((s) => ({ value: s, label: s })),
     [filters],
   );
-  const categoryOptions: MultiSelectOption[] = useMemo(
-    () => (filters?.categories || []).map((s) => ({ value: s, label: s })),
-    [filters],
-  );
   const stateOptions: MultiSelectOption[] = useMemo(
     () => (filters?.states || []).map((s) => ({ value: s, label: s })),
     [filters],
-  );
-  const cityOptions: MultiSelectOption[] = useMemo(
-    () => ((citiesOverride ?? filters?.cities) || []).map((s) => ({ value: s, label: s })),
-    [citiesOverride, filters],
   );
   const productSelectOptions: MultiSelectOption[] = useMemo(() => {
     const map = new Map<string, MultiSelectOption>();
@@ -234,13 +336,9 @@ const DashboardSimulacoes = () => {
       "||" +
       [...channels].sort().join("|") +
       "||" +
-      [...categories].sort().join("|") +
-      "||" +
       [...productValues].sort().join("|") +
       "||" +
       [...states].sort().join("|") +
-      "||" +
-      [...cities].sort().join("|") +
       "||" +
       String(dateRange.start || "") +
       ".." +
@@ -249,7 +347,7 @@ const DashboardSimulacoes = () => {
     for (let i = 0; i < key.length; i++) h = Math.imul(h ^ key.charCodeAt(i), 16777619);
     const baseFactor = 0.85 + ((h >>> 0) % 70) / 100; // 0.85..1.54
     return baseFactor;
-  }, [categories, channels, cities, dateRange.end, dateRange.start, productValues, states, stores]);
+  }, [channels, dateRange.end, dateRange.start, productValues, states, stores]);
 
   const avgTicketBRL = useMemo(() => {
     // ticket médio fake (determinístico), usado só para estimar "R$ perdido"
@@ -270,6 +368,7 @@ const DashboardSimulacoes = () => {
     sims: number;
     orders: number;
     lostBRL: number;
+    revenueBRL: number;
     x: number;
     y: number;
   } | null>(null);
@@ -307,40 +406,25 @@ const DashboardSimulacoes = () => {
   const mapPath = useMemo(() => (mapProjection ? geoPath(mapProjection) : null), [mapProjection]);
 
   const stateSimOrders = useMemo(() => {
-    // base simples + hash por UF para espalhar valores
-    const baseSims: Record<string, number> = {
-      SP: 52000,
-      RJ: 21000,
-      MG: 24000,
-      PR: 14000,
-      RS: 16000,
-      SC: 11000,
-      BA: 9000,
-      GO: 8000,
-      DF: 7000,
-      PE: 7200,
-      CE: 6000,
-      PA: 5200,
-      AM: 4200,
-    };
-    const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
-    const out = new Map<string, { sims: number; orders: number; conv: number; lostBRL: number }>();
+    const out = new Map<string, { sims: number; orders: number; conv: number; lostBRL: number; revenueBRL: number }>();
+    // inicializa com 0 para todos os estados do mapa
     for (const f of geoFeatures) {
       const id = String(f?.id || f?.properties?.id || "");
       if (!id) continue;
-      const base = baseSims[id] ?? 3500;
-      let h = 0;
-      for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
-      const wave = 0.75 + ((h % 70) / 100); // 0.75..1.44
-      const sims = Math.max(30, Math.round(base * wave * simScale));
-      // conv cai levemente com "hash" (pra variar) mas mantém faixa ok
-      const conv = clamp(0.42 + (((h >>> 1) % 40) / 100) - ((h % 7) * 0.015), 0.08, 0.72);
-      const orders = Math.max(0, Math.min(sims, Math.round(sims * conv)));
-      const lostBRL = Math.max(0, sims - orders) * avgTicketBRL;
-      out.set(id, { sims, orders, conv: sims > 0 ? orders / sims : 0, lostBRL });
+      out.set(id, { sims: 0, orders: 0, conv: 0, lostBRL: 0, revenueBRL: 0 });
+    }
+    for (const r of stateSeries) {
+      const uf = String(r.state || "").trim().toUpperCase();
+      if (!uf) continue;
+      const sims = Number(r.sims ?? 0) || 0;
+      const orders = Number(r.orders ?? 0) || 0;
+      const conv = sims > 0 ? orders / sims : 0;
+      const lostBRL = Math.max(0, sims - orders) * avgTicketBRL; // estimativa (mantém UI atual)
+      const revenueBRL = orders * avgTicketBRL; // estimativa de faturamento por UF
+      out.set(uf, { sims, orders, conv, lostBRL, revenueBRL });
     }
     return out;
-  }, [avgTicketBRL, geoFeatures, simScale]);
+  }, [avgTicketBRL, geoFeatures, stateSeries]);
 
   const lostMax = useMemo(() => Math.max(1, ...Array.from(stateSimOrders.values()).map((x) => x.lostBRL)), [stateSimOrders]);
   const convMax = useMemo(() => Math.max(0.01, ...Array.from(stateSimOrders.values()).map((x) => x.conv)), [stateSimOrders]);
@@ -361,296 +445,72 @@ const DashboardSimulacoes = () => {
       sims: v.sims,
       orders: v.orders,
     }));
-    rows.sort((a, b) => b.lostBRL - a.lostBRL || a.id.localeCompare(b.id));
+    rows.sort((a, b) => {
+      if (mapMode === "conv") {
+        return b.conv - a.conv || b.sims - a.sims || a.id.localeCompare(b.id);
+      }
+      return b.lostBRL - a.lostBRL || b.sims - a.sims || a.id.localeCompare(b.id);
+    });
     return rows;
-  }, [stateSimOrders]);
+  }, [mapMode, stateSimOrders]);
 
-  // sankey: conversão (solicitações de frete -> faixa de frete -> prazo -> pedido/não)
-  const sankeyFreteBuckets = useMemo(
+  // Buckets do scatter (discretos)
+  const FREIGHT_RANGE_VALUES = useMemo(
     () => [
-      "Frete grátis",
-      "Frete até R$ 10,00",
-      "Frete até R$ 50,00",
-      "Frete até R$ 100,00",
-      "Frete até R$ 500,00",
-      "Frete até R$ 1.000,00",
-      "Frete acima de R$ 1.000,00",
+      "R$0,00 (FREE)",
+      "entre R$ 0,01 e R$ 100,00",
+      "entre R$ 100,01 e R$ 200,00",
+      "entre R$ 200,01 e R$ 300,00",
+      "entre R$ 300,01 e R$ 500,00",
+      "entre R$ 500,01 e R$ 1.000,00",
+      "entre R$ 1.000,01 e R$ 10.000,00",
+      "acima de R$ 10.000,00",
     ],
     [],
   );
+  const DEADLINE_BUCKETS = useMemo(() => [">0", ">5", ">10", ">15", ">20", ">25", ">30", ">35", ">40", ">45", ">60"], []);
 
-  const sankeyPrazoBuckets = useMemo(
-    () => ["Até 3 dias", "Até 7 dias", "Até 15 dias", "Até 30 dias", "Até 40 dias", "Até 60 dias", "Mais de 60 dias"],
-    [],
-  );
+  const freightRangeIndex = useMemo(() => {
+    const m = new Map<string, number>();
+    FREIGHT_RANGE_VALUES.forEach((label, idx) => m.set(label, idx));
+    return m;
+  }, [FREIGHT_RANGE_VALUES]);
 
-  const sankeyData = useMemo(() => {
-    const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
-    const rootId = "Solicitações de frete";
-    const pedidosId = "Pedidos";
-    const naoId = "Não converteu";
+  const deadlineBucketIndex = useMemo(() => {
+    const m = new Map<string, number>();
+    DEADLINE_BUCKETS.forEach((label, idx) => m.set(label, idx));
+    return m;
+  }, [DEADLINE_BUCKETS]);
 
-    // matriz (frete -> prazo) com números determinísticos (fakes), caindo com frete e prazo piores
-    const mat: number[][] = sankeyFreteBuckets.map((_, fi) =>
-      sankeyPrazoBuckets.map((__, pi) => {
-        const base = 1900 - fi * 150 - pi * 120;
-        const wave = 0.78 + 0.22 * Math.sin((fi + 1) * 0.85 + (pi + 1) * 0.72);
-        return Math.max(12, Math.round(base * wave * simScale));
-      }),
-    );
 
-    const totalPorFrete = mat.map((row) => row.reduce((a, b) => a + b, 0));
-    const totalPorPrazo = sankeyPrazoBuckets.map((_, pi) => mat.reduce((sum, row) => sum + (row[pi] ?? 0), 0));
-    const totalSolicitacoes = totalPorFrete.reduce((a, b) => a + b, 0);
-
-    // conversão por prazo (cai conforme o prazo aumenta) e também penaliza frete muito alto via alocação
-    const convRatePrazo = sankeyPrazoBuckets.map((_, pi) => clamp(0.58 - pi * 0.065, 0.07, 0.7));
-    const pedidosPorPrazo = totalPorPrazo.map((t, pi) => Math.max(0, Math.min(t, Math.round(t * convRatePrazo[pi]))));
-    const naoPorPrazo = totalPorPrazo.map((t, pi) => Math.max(0, t - pedidosPorPrazo[pi]));
-
-    // aloca os pedidos de cada prazo de volta para cada faixa de frete (para tooltip de conversão por frete)
-    const pedidosMat: number[][] = sankeyPrazoBuckets.map((_, pi) => {
-      const col = sankeyFreteBuckets.map((__, fi) => mat[fi][pi] ?? 0);
-      const colSum = col.reduce((a, b) => a + b, 0);
-      const target = pedidosPorPrazo[pi] ?? 0;
-      if (!colSum || !target) return sankeyFreteBuckets.map(() => 0);
-      const raw = col.map((v) => (v / colSum) * target);
-      const flo = raw.map((v) => Math.floor(v));
-      let left = target - flo.reduce((a, b) => a + b, 0);
-      const order = raw
-        .map((v, idx) => ({ idx, rem: v - Math.floor(v) }))
-        .sort((a, b) => b.rem - a.rem)
-        .map((x) => x.idx);
-      for (let i = 0; i < order.length && left > 0; i++) {
-        flo[order[i]] += 1;
-        left -= 1;
-      }
-      return flo;
-    });
-
-    const pedidosPorFrete = sankeyFreteBuckets.map((_, fi) =>
-      sankeyPrazoBuckets.reduce((sum, __, pi) => sum + (pedidosMat[pi]?.[fi] ?? 0), 0),
-    );
-
-    const nodes: any[] = [
-      { id: rootId, kind: "root" },
-      ...sankeyFreteBuckets.map((id) => ({ id, kind: "frete" })),
-      ...sankeyPrazoBuckets.map((id) => ({ id, kind: "prazo" })),
-      { id: pedidosId, kind: "resultado" },
-      { id: naoId, kind: "resultado" },
-    ];
-
-    const links: any[] = [
-      ...sankeyFreteBuckets.map((f, fi) => ({ source: rootId, target: f, value: totalPorFrete[fi] ?? 0 })),
-      ...sankeyFreteBuckets.flatMap((f, fi) => sankeyPrazoBuckets.map((p, pi) => ({ source: f, target: p, value: mat[fi][pi] ?? 0 }))),
-      ...sankeyPrazoBuckets.flatMap((p, pi) => [
-        { source: p, target: pedidosId, value: pedidosPorPrazo[pi] ?? 0 },
-        { source: p, target: naoId, value: naoPorPrazo[pi] ?? 0 },
-      ]),
-    ].filter((l) => Number(l.value) > 0);
-
-    const meta = {
-      rootId,
-      pedidosId,
-      naoId,
-      totalSolicitacoes,
-      totalPorFrete,
-      pedidosPorFrete,
-      totalPorPrazo,
-      pedidosPorPrazo,
-    };
-
-    return { nodes, links, meta };
-  }, [sankeyFreteBuckets, sankeyPrazoBuckets, simScale]);
-
-  const sankeyNodeColor = useMemo(() => {
-    const root = CHART_COLORS[0];
-    const prazo = CHART_COLORS[5] || CHART_COLORS[0];
-    const frete = "#FF751A";
-    const pedidos = CHART_COLORS[3] || "#61C9A8";
-    const nao = CHART_COLORS[4] || "#BA3B46";
-    return (node: any) => {
-      const kind = String(node?.kind ?? "");
-      const id = String(node?.id ?? "");
-      if (kind === "root") return root;
-      if (id === sankeyData?.meta?.pedidosId) return pedidos;
-      if (id === sankeyData?.meta?.naoId) return nao;
-      if (kind === "frete") return frete;
-      if (kind === "prazo") return prazo;
-      return CHART_COLORS[1] || "#FF751A";
-    };
-  }, [sankeyData?.meta?.naoId, sankeyData?.meta?.pedidosId]);
-
-  // scatterplot: cada bolha é (faixa frete x prazo), tamanho = % conversão
+  // scatterplot real: cada bolha é (range_value x range_deadline), tamanho = taxa de conversão
   const scatterData = useMemo(() => {
-    const s = sankeyData as any;
-    const links: any[] = Array.isArray(s?.links) ? s.links : [];
-    const totalByKey = new Map<string, number>();
-    const ordersByKey = new Map<string, number>();
-
-    const rootId = String(s?.meta?.rootId ?? "Solicitações de frete");
-    const pedidosId = String(s?.meta?.pedidosId ?? "Pedidos");
-
-    // totals: frete -> prazo
-    for (const l of links) {
-      const src = String(l?.source?.id ?? l?.source ?? "");
-      const tgt = String(l?.target?.id ?? l?.target ?? "");
-      const v = Number(l?.value ?? 0);
-      if (!v) continue;
-      if (src === rootId) continue;
-      if (tgt === pedidosId) continue;
-      if (sankeyFreteBuckets.includes(src) && sankeyPrazoBuckets.includes(tgt)) {
-        totalByKey.set(`${src}||${tgt}`, v);
-      }
-    }
-
-    // orders: prazo -> Pedidos
-    const ordersByPrazo = new Map<string, number>();
-    for (const l of links) {
-      const src = String(l?.source?.id ?? l?.source ?? "");
-      const tgt = String(l?.target?.id ?? l?.target ?? "");
-      const v = Number(l?.value ?? 0);
-      if (!v) continue;
-      if (tgt === pedidosId && sankeyPrazoBuckets.includes(src)) ordersByPrazo.set(src, v);
-    }
-
-    // reparte pedidos do prazo pelos fretes proporcionalmente às solicitações
-    for (const prazo of sankeyPrazoBuckets) {
-      const targetOrders = Number(ordersByPrazo.get(prazo) ?? 0);
-      if (!targetOrders) continue;
-      const totals = sankeyFreteBuckets.map((f) => Number(totalByKey.get(`${f}||${prazo}`) ?? 0));
-      const sum = totals.reduce((a, b) => a + b, 0);
-      if (!sum) continue;
-      for (let fi = 0; fi < sankeyFreteBuckets.length; fi++) {
-        const frete = sankeyFreteBuckets[fi];
-        const raw = (totals[fi] / sum) * targetOrders;
-        ordersByKey.set(`${frete}||${prazo}`, Math.max(0, Math.round(raw)));
-      }
-    }
-
-    const freteX: Record<string, number> = {
-      "Frete grátis": 0,
-      "Frete até R$ 10,00": 10,
-      "Frete até R$ 50,00": 50,
-      "Frete até R$ 100,00": 100,
-      "Frete até R$ 500,00": 500,
-      "Frete até R$ 1.000,00": 1000,
-      "Frete acima de R$ 1.000,00": 1500,
-    };
-    const prazoY: Record<string, number> = {
-      "Até 3 dias": 3,
-      "Até 7 dias": 7,
-      "Até 15 dias": 15,
-      "Até 30 dias": 30,
-      "Até 40 dias": 40,
-      "Até 60 dias": 60,
-      "Mais de 60 dias": 75,
-    };
-
-    const points = sankeyFreteBuckets.flatMap((frete) =>
-      sankeyPrazoBuckets.map((prazo) => {
-        const total = Number(totalByKey.get(`${frete}||${prazo}`) ?? 0);
-        const orders = Number(ordersByKey.get(`${frete}||${prazo}`) ?? 0);
-        const conv = total > 0 ? orders / total : 0;
-        return {
-          id: `${frete} | ${prazo}`,
-          x: freteX[frete] ?? 0,
-          y: prazoY[prazo] ?? 0,
-          frete,
-          prazo,
-          total,
-          orders,
-          conv,
-          convPct: conv * 100,
-        };
-      }),
-    );
-
+    const points = freightScatterPoints.map((p, idx) => ({
+      id: `p${idx}`,
+      x: freightRangeIndex.get(String(p.rangeValue ?? "")) ?? -1,
+      y: deadlineBucketIndex.get(String(p.rangeDeadline ?? "")) ?? -1,
+      rangeValue: String(p.rangeValue ?? ""),
+      rangeDeadline: String(p.rangeDeadline ?? ""),
+      total: Number(p.total ?? 0),
+      orders: Number(p.orders ?? 0),
+      conv: Number(p.conversion ?? 0),
+      convPct: (Number(p.conversion ?? 0) || 0) * 100,
+    }));
     return [{ id: "Conversão", data: points }];
-  }, [sankeyData, sankeyFreteBuckets, sankeyPrazoBuckets]);
+  }, [deadlineBucketIndex, freightRangeIndex, freightScatterPoints]);
 
-  const conversionByPrazo = useMemo(() => {
-    const m = (sankeyData as any)?.meta;
-    const list = sankeyPrazoBuckets.map((label, idx) => {
-      const sims = Number(m?.totalPorPrazo?.[idx] ?? 0);
-      const orders = Number(m?.pedidosPorPrazo?.[idx] ?? 0);
-      const lostCount = Math.max(0, sims - orders);
-      const conv = sims > 0 ? orders / sims : 0;
-      const lostBRL = lostCount * avgTicketBRL;
-      return { label, sims, orders, conv, lostBRL };
-    });
-    return list;
-  }, [avgTicketBRL, sankeyData, sankeyPrazoBuckets]);
+  // (Sankey removido) - removemos também os blocos/tabelas que dependiam dele.
 
-  const conversionByFrete = useMemo(() => {
-    const m = (sankeyData as any)?.meta;
-    const list = sankeyFreteBuckets.map((label, idx) => {
-      const sims = Number(m?.totalPorFrete?.[idx] ?? 0);
-      const orders = Number(m?.pedidosPorFrete?.[idx] ?? 0);
-      const lostCount = Math.max(0, sims - orders);
-      const conv = sims > 0 ? orders / sims : 0;
-      const lostBRL = lostCount * avgTicketBRL;
-      return { label, sims, orders, conv, lostBRL };
-    });
-    return list;
-  }, [avgTicketBRL, sankeyData, sankeyFreteBuckets]);
-
-  const [prazoSort, setPrazoSort] = useState<SortState>({ key: "conv", dir: "desc" });
-  const [freteSort, setFreteSort] = useState<SortState>({ key: "conv", dir: "desc" });
-
-  const sortRows = <T extends { label: string; conv: number; orders: number; sims: number; lostBRL: number }>(
-    rows: T[],
-    sort: SortState,
-  ) => {
-    const dirMul = sort.dir === "asc" ? 1 : -1;
-    const cmp = (a: T, b: T) => {
-      if (sort.key === "label") return String(a.label).localeCompare(String(b.label)) * dirMul;
-      const av = Number((a as any)[sort.key] ?? 0);
-      const bv = Number((b as any)[sort.key] ?? 0);
-      if (av === bv) return String(a.label).localeCompare(String(b.label));
-      return (av < bv ? -1 : 1) * dirMul;
-    };
-    return [...rows].sort(cmp);
-  };
-
-  const sortedPrazoRows = useMemo(() => sortRows(conversionByPrazo, prazoSort), [conversionByPrazo, prazoSort]);
-  const sortedFreteRows = useMemo(() => sortRows(conversionByFrete, freteSort), [conversionByFrete, freteSort]);
-
-  // série fake (determinística): simulações e pedidos por dia
+  // série real: simulações e pedidos por dia (DD/MM/YYYY)
   const series = useMemo(() => {
-    const start = dateRange.start ? new Date(`${dateRange.start}T00:00:00`) : new Date();
-    const end = dateRange.end ? new Date(`${dateRange.end}T00:00:00`) : new Date();
-    const days = Math.max(1, Math.min(60, Math.floor((end.getTime() - start.getTime()) / 86400000) + 1));
-
-    const key =
-      [...stores].sort().join("|") +
-      "||" +
-      [...channels].sort().join("|") +
-      "||" +
-      [...categories].sort().join("|") +
-      "||" +
-      [...productValues].sort().join("|") +
-      "||" +
-      [...states].sort().join("|") +
-      "||" +
-      [...cities].sort().join("|");
-    let h = 2166136261;
-    for (let i = 0; i < key.length; i++) h = Math.imul(h ^ key.charCodeAt(i), 16777619);
-    const baseFactor = 0.8 + ((h >>> 0) % 70) / 100; // 0.8..1.49
-
-    const fmt = (d: Date) => `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}`;
     const sims: { x: string; y: number }[] = [];
     const orders: { x: string; y: number }[] = [];
     const byDay = new Map<string, { sims: number; orders: number }>();
 
-    for (let i = 0; i < days; i++) {
-      const d = new Date(start);
-      d.setDate(d.getDate() + i);
-      const x = fmt(d);
-      const wave = 0.7 + 0.3 * Math.sin((i / 4) * Math.PI);
-      const s = Math.max(10, Math.round(1200 * baseFactor * wave));
-      const conv = 0.12 + 0.06 * Math.sin((i / 9) * Math.PI + 0.7); // 6%..18%
-      const o = Math.max(1, Math.round(s * conv));
+    for (const r of dailySeries) {
+      const x = String(r.date);
+      const s = Number(r.sims ?? 0) || 0;
+      const o = Number(r.orders ?? 0) || 0;
       sims.push({ x, y: s });
       orders.push({ x, y: o });
       byDay.set(x, { sims: s, orders: o });
@@ -663,7 +523,7 @@ const DashboardSimulacoes = () => {
       ],
       byDay,
     };
-  }, [categories, channels, cities, dateRange.end, dateRange.start, productValues, states, stores]);
+  }, [dailySeries]);
 
   return (
     <div className="w-full">
@@ -691,12 +551,18 @@ const DashboardSimulacoes = () => {
         </div>
       </div>
 
-      {filtersLoading || filtersError || productLoading || productError ? (
+      {filtersLoading || filtersError || productLoading || productError || dailyLoading || dailyError || stateLoading || stateError ? (
         <div className="mt-2 space-y-1">
           {filtersLoading ? <div className="text-sm text-slate-700">Carregando filtros...</div> : null}
           {!filtersLoading && filtersError ? <div className="text-sm text-red-600">{filtersError}</div> : null}
           {productLoading ? <div className="text-xs text-slate-600">Buscando produtos...</div> : null}
           {!productLoading && productError ? <div className="text-xs text-red-600">{productError}</div> : null}
+          {dailyLoading ? <div className="text-sm text-slate-700">Carregando série diária...</div> : null}
+          {!dailyLoading && dailyError ? <div className="text-sm text-red-600">{dailyError}</div> : null}
+          {freightScatterLoading ? <div className="text-sm text-slate-700">Carregando mapa de conversão (frete × prazo)...</div> : null}
+          {!freightScatterLoading && freightScatterError ? <div className="text-sm text-red-600">{freightScatterError}</div> : null}
+          {stateLoading ? <div className="text-sm text-slate-700">Carregando mapa por estado...</div> : null}
+          {!stateLoading && stateError ? <div className="text-sm text-red-600">{stateError}</div> : null}
         </div>
       ) : null}
 
@@ -744,9 +610,6 @@ const DashboardSimulacoes = () => {
                     <span className="text-slate-600">Conversão</span>
                     <span className="font-extrabold text-slate-900 tabular-nums">{formatPct1(conv)}</span>
                   </div>
-                  <div className="mt-1 text-[11px] text-slate-500">
-                    Série: <span className="font-semibold">{String(point?.serieId)}</span>
-                  </div>
                 </div>
               );
             }}
@@ -764,122 +627,6 @@ const DashboardSimulacoes = () => {
         </div>
       </Card>
 
-      {/* Sankey: conversão (solicitações de frete -> prazo -> pedido) */}
-      <Card className="mt-4 w-full border-slate-200 bg-white p-5">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <div className="text-lg font-extrabold text-slate-900">Conversão por frete e prazo de entrega</div>
-            <div className="mt-1 text-sm text-slate-600">
-              Total de solicitações: <span className="font-semibold text-slate-900">{formatBigNumber(sankeyData.meta.totalSolicitacoes)}</span>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
-            <div className="inline-flex items-center gap-2 text-slate-700">
-              <span className="h-2.5 w-2.5 rounded-full" style={{ background: "#FF751A" }} />
-              <span className="font-semibold">Faixa de frete</span>
-            </div>
-            <div className="inline-flex items-center gap-2 text-slate-700">
-              <span className="h-2.5 w-2.5 rounded-full" style={{ background: CHART_COLORS[5] || CHART_COLORS[0] }} />
-              <span className="font-semibold">Prazo</span>
-            </div>
-            <div className="inline-flex items-center gap-2 text-slate-700">
-              <span className="h-2.5 w-2.5 rounded-full" style={{ background: CHART_COLORS[3] || "#61C9A8" }} />
-              <span className="font-semibold">Pedidos</span>
-            </div>
-            <div className="inline-flex items-center gap-2 text-slate-700">
-              <span className="h-2.5 w-2.5 rounded-full" style={{ background: CHART_COLORS[4] || "#BA3B46" }} />
-              <span className="font-semibold">Não converteu</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-3" style={{ height: 440 }}>
-          <ResponsiveSankey
-            data={sankeyData as any}
-            margin={{ top: 10, right: 20, bottom: 10, left: 20 }}
-            align="justify"
-            sort="input"
-            colors={sankeyNodeColor as any}
-            nodeOpacity={1}
-            nodeHoverOpacity={1}
-            nodeThickness={14}
-            nodeInnerPadding={8}
-            nodeSpacing={18}
-            nodeBorderWidth={0}
-            linkOpacity={0.25}
-            linkHoverOpacity={0.5}
-            linkContract={3}
-            enableLabels={true}
-            labelPosition="outside"
-            labelOrientation="horizontal"
-            labelPadding={10}
-            labelTextColor="#334155"
-            valueFormat={(v: any) => formatBigNumber(Number(v))}
-            nodeTooltip={({ node }: any) => {
-              const id = String(node?.id ?? "");
-              const kind = String((node as any)?.kind ?? "");
-              const v = Number(node?.value ?? 0);
-              const m = (sankeyData as any)?.meta;
-              if (!m) {
-                return (
-                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 shadow-xl">
-                    <div className="font-extrabold">{id}</div>
-                    <div>{formatBigNumber(v)}</div>
-                  </div>
-                );
-              }
-              let convText: string | null = null;
-              if (kind === "frete") {
-                const idx = sankeyFreteBuckets.indexOf(id);
-                if (idx >= 0) {
-                  const tot = Number(m.totalPorFrete?.[idx] ?? 0);
-                  const ped = Number(m.pedidosPorFrete?.[idx] ?? 0);
-                  convText = tot > 0 ? `Conversão: ${formatPct(ped / tot)} (${formatBigNumber(ped)} pedidos)` : null;
-                }
-              } else if (kind === "prazo") {
-                const idx = sankeyPrazoBuckets.indexOf(id);
-                if (idx >= 0) {
-                  const tot = Number(m.totalPorPrazo?.[idx] ?? 0);
-                  const ped = Number(m.pedidosPorPrazo?.[idx] ?? 0);
-                  convText = tot > 0 ? `Conversão: ${formatPct(ped / tot)} (${formatBigNumber(ped)} pedidos)` : null;
-                }
-              } else if (id === m.rootId) {
-                const tot = Number(m.totalSolicitacoes ?? 0);
-                const ped = (m.pedidosPorPrazo ?? []).reduce((a: number, b: number) => a + Number(b || 0), 0);
-                convText = tot > 0 ? `Conversão geral: ${formatPct(ped / tot)} (${formatBigNumber(ped)} pedidos)` : null;
-              }
-              return (
-                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 shadow-xl">
-                  <div className="font-extrabold">{id}</div>
-                  <div>{formatBigNumber(v)} solicitações</div>
-                  {convText ? <div className="mt-1 text-slate-700">{convText}</div> : null}
-                </div>
-              );
-            }}
-            linkTooltip={({ link }: any) => {
-              const s = String(link?.source?.id ?? link?.source ?? "");
-              const t = String(link?.target?.id ?? link?.target ?? "");
-              const v = Number(link?.value ?? 0);
-              const total = Number((sankeyData as any)?.meta?.totalSolicitacoes ?? 0);
-              const share = total > 0 ? v / total : 0;
-              return (
-                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 shadow-xl">
-                  <div className="font-extrabold">
-                    {s} → {t}
-                  </div>
-                  <div>
-                    {formatBigNumber(v)} ({formatPct(share)})
-                  </div>
-                </div>
-              );
-            }}
-            theme={{
-              labels: { text: { fill: "#334155", fontWeight: 600 } },
-              tooltip: { container: { background: "#fff", color: "#0f172a", fontSize: 12, borderRadius: 12 } },
-            }}
-          />
-        </div>
-      </Card>
 
       {/* ScatterPlot: conversão como bolhas (X=preço frete, Y=prazo) */}
       <Card className="mt-4 w-full border-slate-200 bg-white p-5">
@@ -892,24 +639,24 @@ const DashboardSimulacoes = () => {
         <div className="mt-3" style={{ height: 420 }}>
           <ResponsiveScatterPlot
             data={scatterData as any}
-            margin={{ top: 16, right: 24, bottom: 56, left: 84 }}
-            xScale={{ type: "linear", min: 0, max: "auto" }}
-            yScale={{ type: "linear", min: 0, max: "auto" }}
+            margin={{ top: 16, right: 24, bottom: 120, left: 84 }}
+            xScale={{ type: "linear", min: 0, max: FREIGHT_RANGE_VALUES.length - 1 }}
+            yScale={{ type: "linear", min: 0, max: DEADLINE_BUCKETS.length - 1 }}
             axisBottom={{
-              legend: "Preço do frete (R$)",
+              legend: "",
               legendOffset: 44,
               legendPosition: "middle",
-              format: (v: any) => {
-                const n = Number(v);
-                if (!Number.isFinite(n)) return String(v);
-                return n >= 1000 ? "1000+" : String(n);
-              },
+              tickRotation: -35,
+              tickPadding: 6,
+              tickValues: FREIGHT_RANGE_VALUES.map((_, i) => i) as any,
+              format: (v: any) => FREIGHT_RANGE_VALUES[Math.round(Number(v))] ?? "",
             }}
             axisLeft={{
               legend: "Prazo (dias)",
               legendOffset: -56,
               legendPosition: "middle",
-              format: (v: any) => String(v),
+              tickValues: DEADLINE_BUCKETS.map((_, i) => i) as any,
+              format: (v: any) => DEADLINE_BUCKETS[Math.round(Number(v))] ?? "",
             }}
             colors={() => "#FF751A"}
             blendMode="multiply"
@@ -921,8 +668,8 @@ const DashboardSimulacoes = () => {
               const clamped = Math.max(0, Math.min(70, v));
               return 6 + (clamped / 70) * (28 - 6);
             }}
-            gridXValues={[0, 10, 50, 100, 500, 1000, 1500]}
-            gridYValues={[3, 7, 15, 30, 40, 60, 75]}
+            gridXValues={FREIGHT_RANGE_VALUES.map((_, i) => i) as any}
+            gridYValues={DEADLINE_BUCKETS.map((_, i) => i) as any}
             tooltip={({ node }: any) => {
               const d = (node?.data as any) ?? {};
               const conv = Number(d?.conv ?? 0);
@@ -930,8 +677,8 @@ const DashboardSimulacoes = () => {
               const orders = Number(d?.orders ?? 0);
               return (
                 <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 shadow-xl">
-                  <div className="font-extrabold">{String(d?.frete ?? "")}</div>
-                  <div className="text-slate-600">{String(d?.prazo ?? "")}</div>
+                  <div className="font-extrabold">{String(d?.rangeValue ?? "")}</div>
+                  <div className="text-slate-600">Prazo: {String(d?.rangeDeadline ?? "")}</div>
                   <div className="mt-1">
                     Conversão: <span className="font-extrabold">{formatPct(conv)}</span>
                   </div>
@@ -1000,6 +747,7 @@ const DashboardSimulacoes = () => {
                     const row = stateSimOrders.get(id);
                     const conv = Number(row?.conv ?? 0);
                     const lostBRL = Number(row?.lostBRL ?? 0);
+                    const revenueBRL = Number(row?.revenueBRL ?? 0);
                     const fill =
                       !row ? mapUnknownColor : mapMode === "conv" ? convScale(conv) : lostScale(lostBRL);
                     return (
@@ -1018,6 +766,7 @@ const DashboardSimulacoes = () => {
                             id,
                             conv,
                             lostBRL,
+                            revenueBRL,
                             sims: Number(row?.sims ?? 0),
                             orders: Number(row?.orders ?? 0),
                             x,
@@ -1041,8 +790,9 @@ const DashboardSimulacoes = () => {
                   >
                     <div className="font-extrabold">{mapHover.id}</div>
                     <div className="mt-1 text-slate-700">
-                      {mapMode === "conv" ? `Conversão: ${formatPct(mapHover.conv)}` : `Perdido: ${formatBRLBig(mapHover.lostBRL)}`}
+                      Conversão: {formatPct(mapHover.conv)}
                     </div>
+                    <div className="text-slate-700">Faturamento: {formatBRLBig(mapHover.revenueBRL)}</div>
                     <div className="text-slate-600">
                       Pedidos: {formatBigNumber(mapHover.orders)} • Simulações: {formatBigNumber(mapHover.sims)}
                     </div>
@@ -1059,7 +809,9 @@ const DashboardSimulacoes = () => {
 
         <Card className="w-full border-slate-200 bg-white p-5 lg:col-span-5">
           <div className="text-lg font-extrabold text-slate-900">Estados</div>
-          <div className="mt-1 text-xs text-slate-600">Conversão e R$ perdido por UF</div>
+          <div className="mt-1 text-xs text-slate-600">
+            {mapMode === "conv" ? "Ordenado por conversão (pedidos ÷ simulações)" : "Ordenado por R$ perdido (estimativa)"}
+          </div>
           <div className="mt-3 overflow-hidden rounded-xl border border-slate-200">
             <div className="max-h-[360px] overflow-auto">
               <table className="w-full text-left text-sm">
@@ -1078,8 +830,22 @@ const DashboardSimulacoes = () => {
                       <td className="px-4 py-3 text-slate-900">{row.id}</td>
                       <td className="px-4 py-3 text-right text-slate-900 tabular-nums">{formatBigNumber(row.orders)}</td>
                       <td className="px-4 py-3 text-right text-slate-700 tabular-nums">{formatBigNumber(row.sims)}</td>
-                      <td className="px-4 py-3 text-right text-slate-900 tabular-nums">{formatPct(row.conv)}</td>
-                      <td className="px-4 py-3 text-right text-slate-900 tabular-nums">{formatBRLBig(row.lostBRL)}</td>
+                      <td
+                        className={[
+                          "px-4 py-3 text-right tabular-nums",
+                          mapMode === "conv" ? "text-slate-900 font-extrabold" : "text-slate-600",
+                        ].join(" ")}
+                      >
+                        {formatPct(row.conv)}
+                      </td>
+                      <td
+                        className={[
+                          "px-4 py-3 text-right tabular-nums",
+                          mapMode === "lost" ? "text-slate-900 font-extrabold" : "text-slate-600",
+                        ].join(" ")}
+                      >
+                        {formatBRLBig(row.lostBRL)}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1089,198 +855,15 @@ const DashboardSimulacoes = () => {
         </Card>
       </div>
 
-      {/* Tabelas finais: maiores conversões */}
-      <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-12">
-        <Card className="w-full border-slate-200 bg-white p-5 lg:col-span-6">
-          <div className="flex items-end justify-between gap-3">
-            <div>
-              <div className="text-lg font-extrabold text-slate-900">Melhores conversões por prazo</div>
-              <div className="mt-1 text-xs text-slate-600">
-                R$ perdido é uma estimativa: (não converteu) × ticket médio ({formatBRLNoSpace(avgTicketBRL)})
-              </div>
-            </div>
-          </div>
-          <div className="mt-3 overflow-hidden rounded-xl border border-slate-200">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-slate-50">
-                <tr className="text-xs font-extrabold text-slate-600">
-                  <th className="px-4 py-3">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setPrazoSort((cur) => ({ key: "label", dir: cur.key === "label" ? (cur.dir === "asc" ? "desc" : "asc") : "asc" }))
-                      }
-                      className="inline-flex items-center gap-2 hover:text-slate-900"
-                    >
-                      Prazo
-                      <span className="text-slate-400">{prazoSort.key === "label" ? (prazoSort.dir === "asc" ? "▲" : "▼") : ""}</span>
-                    </button>
-                  </th>
-                  <th className="px-4 py-3 text-right">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setPrazoSort((cur) => ({ key: "conv", dir: cur.key === "conv" ? (cur.dir === "asc" ? "desc" : "asc") : "desc" }))
-                      }
-                      className="inline-flex items-center gap-2 hover:text-slate-900"
-                    >
-                      Conversão
-                      <span className="text-slate-400">{prazoSort.key === "conv" ? (prazoSort.dir === "asc" ? "▲" : "▼") : ""}</span>
-                    </button>
-                  </th>
-                  <th className="px-4 py-3 text-right">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setPrazoSort((cur) => ({ key: "orders", dir: cur.key === "orders" ? (cur.dir === "asc" ? "desc" : "asc") : "desc" }))
-                      }
-                      className="inline-flex items-center gap-2 hover:text-slate-900"
-                    >
-                      Pedidos
-                      <span className="text-slate-400">{prazoSort.key === "orders" ? (prazoSort.dir === "asc" ? "▲" : "▼") : ""}</span>
-                    </button>
-                  </th>
-                  <th className="px-4 py-3 text-right">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setPrazoSort((cur) => ({ key: "sims", dir: cur.key === "sims" ? (cur.dir === "asc" ? "desc" : "asc") : "desc" }))
-                      }
-                      className="inline-flex items-center gap-2 hover:text-slate-900"
-                    >
-                      Simulações
-                      <span className="text-slate-400">{prazoSort.key === "sims" ? (prazoSort.dir === "asc" ? "▲" : "▼") : ""}</span>
-                    </button>
-                  </th>
-                  <th className="px-4 py-3 text-right">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setPrazoSort((cur) => ({ key: "lostBRL", dir: cur.key === "lostBRL" ? (cur.dir === "asc" ? "desc" : "asc") : "desc" }))
-                      }
-                      className="inline-flex items-center gap-2 hover:text-slate-900"
-                    >
-                      R$ perdido
-                      <span className="text-slate-400">{prazoSort.key === "lostBRL" ? (prazoSort.dir === "asc" ? "▲" : "▼") : ""}</span>
-                    </button>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedPrazoRows.slice(0, 7).map((row) => (
-                  <tr key={row.label} className="border-t border-slate-200">
-                    <td className="px-4 py-3 text-slate-900">{row.label}</td>
-                    <td className="px-4 py-3 text-right text-slate-900 tabular-nums">{formatPct(row.conv)}</td>
-                    <td className="px-4 py-3 text-right text-slate-900 tabular-nums">{formatBigNumber(row.orders)}</td>
-                    <td className="px-4 py-3 text-right text-slate-700 tabular-nums">{formatBigNumber(row.sims)}</td>
-                    <td className="px-4 py-3 text-right text-slate-900 tabular-nums">{formatBRLBig(row.lostBRL)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-
-        <Card className="w-full border-slate-200 bg-white p-5 lg:col-span-6">
-          <div className="flex items-end justify-between gap-3">
-            <div>
-              <div className="text-lg font-extrabold text-slate-900">Melhores conversões por faixa de frete</div>
-              <div className="mt-1 text-xs text-slate-600">
-                R$ perdido é uma estimativa: (não converteu) × ticket médio ({formatBRLNoSpace(avgTicketBRL)})
-              </div>
-            </div>
-          </div>
-          <div className="mt-3 overflow-hidden rounded-xl border border-slate-200">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-slate-50">
-                <tr className="text-xs font-extrabold text-slate-600">
-                  <th className="px-4 py-3">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setFreteSort((cur) => ({ key: "label", dir: cur.key === "label" ? (cur.dir === "asc" ? "desc" : "asc") : "asc" }))
-                      }
-                      className="inline-flex items-center gap-2 hover:text-slate-900"
-                    >
-                      Faixa de frete
-                      <span className="text-slate-400">{freteSort.key === "label" ? (freteSort.dir === "asc" ? "▲" : "▼") : ""}</span>
-                    </button>
-                  </th>
-                  <th className="px-4 py-3 text-right">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setFreteSort((cur) => ({ key: "conv", dir: cur.key === "conv" ? (cur.dir === "asc" ? "desc" : "asc") : "desc" }))
-                      }
-                      className="inline-flex items-center gap-2 hover:text-slate-900"
-                    >
-                      Conversão
-                      <span className="text-slate-400">{freteSort.key === "conv" ? (freteSort.dir === "asc" ? "▲" : "▼") : ""}</span>
-                    </button>
-                  </th>
-                  <th className="px-4 py-3 text-right">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setFreteSort((cur) => ({ key: "orders", dir: cur.key === "orders" ? (cur.dir === "asc" ? "desc" : "asc") : "desc" }))
-                      }
-                      className="inline-flex items-center gap-2 hover:text-slate-900"
-                    >
-                      Pedidos
-                      <span className="text-slate-400">{freteSort.key === "orders" ? (freteSort.dir === "asc" ? "▲" : "▼") : ""}</span>
-                    </button>
-                  </th>
-                  <th className="px-4 py-3 text-right">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setFreteSort((cur) => ({ key: "sims", dir: cur.key === "sims" ? (cur.dir === "asc" ? "desc" : "asc") : "desc" }))
-                      }
-                      className="inline-flex items-center gap-2 hover:text-slate-900"
-                    >
-                      Simulações
-                      <span className="text-slate-400">{freteSort.key === "sims" ? (freteSort.dir === "asc" ? "▲" : "▼") : ""}</span>
-                    </button>
-                  </th>
-                  <th className="px-4 py-3 text-right">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setFreteSort((cur) => ({ key: "lostBRL", dir: cur.key === "lostBRL" ? (cur.dir === "asc" ? "desc" : "asc") : "desc" }))
-                      }
-                      className="inline-flex items-center gap-2 hover:text-slate-900"
-                    >
-                      R$ perdido
-                      <span className="text-slate-400">{freteSort.key === "lostBRL" ? (freteSort.dir === "asc" ? "▲" : "▼") : ""}</span>
-                    </button>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedFreteRows.slice(0, 7).map((row) => (
-                  <tr key={row.label} className="border-t border-slate-200">
-                    <td className="px-4 py-3 text-slate-900">{row.label}</td>
-                    <td className="px-4 py-3 text-right text-slate-900 tabular-nums">{formatPct(row.conv)}</td>
-                    <td className="px-4 py-3 text-right text-slate-900 tabular-nums">{formatBigNumber(row.orders)}</td>
-                    <td className="px-4 py-3 text-right text-slate-700 tabular-nums">{formatBigNumber(row.sims)}</td>
-                    <td className="px-4 py-3 text-right text-slate-900 tabular-nums">{formatBRLBig(row.lostBRL)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      </div>
+      {/* (Sankey removido) */}
 
       <SlideOver open={filtersOpen} title="Filtros" onClose={() => setFiltersOpen(false)}>
         {filtersLoading ? <div className="text-slate-700">Carregando filtros...</div> : null}
         {!filtersLoading && filtersError ? <div className="text-sm text-red-600">{filtersError}</div> : null}
         {!filtersLoading && !filtersError && filters ? (
           <div className="space-y-4">
-            <MultiSelect label="Status" options={statusOptions} values={status} onChange={setStatus} placeholder="Todos" />
             <MultiSelect label="Loja" options={storeOptions} values={stores} onChange={setStores} placeholder="Todas" />
             <MultiSelect label="Canal" options={channelOptions} values={channels} onChange={setChannels} placeholder="Todos" />
-            <MultiSelect label="Categoria" options={categoryOptions} values={categories} onChange={setCategories} placeholder="Todas" />
             <MultiSelect
               label="Produto"
               options={productSelectOptions}
@@ -1291,11 +874,8 @@ const DashboardSimulacoes = () => {
               searchPlaceholder="Digite para buscar..."
             />
             <MultiSelect label="Estado" options={stateOptions} values={states} onChange={setStates} placeholder="Todos" />
-            <MultiSelect label="Cidade" options={cityOptions} values={cities} onChange={setCities} placeholder="Todas" />
-            {citiesLoading ? <div className="text-xs text-slate-600">Carregando cidades...</div> : null}
-            {!citiesLoading && citiesError ? <div className="text-xs text-red-600">{citiesError}</div> : null}
             <div className="pt-2 text-xs text-slate-600">
-              Placeholder: depois a gente liga isso nas queries reais (por enquanto só reescala números fakes para demonstrar a interação).
+              Os filtros desta tela afetam os gráficos usando dados do AllPost (freight quotes / freight orders).
             </div>
           </div>
         ) : null}
