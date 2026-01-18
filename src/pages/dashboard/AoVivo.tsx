@@ -9,11 +9,14 @@ import { geoMercator, geoPath } from "d3-geo";
 import { scaleQuantize } from "d3-scale";
 import { SlideOver } from "@/components/ui/slideover";
 import { MultiSelect, type MultiSelectOption } from "@/components/ui/multi-select";
+import { DatePicker } from "@/components/ui/date-picker";
 import { CHART_COLORS } from "@/lib/chartColors";
 import { buildApiUrl } from "@/lib/config";
 import { getAuthHeaders } from "@/lib/auth";
 import { TrendingDown, TrendingUp, SlidersHorizontal } from "lucide-react";
 import brStates from "@/assets/geo/br_states.json";
+import { ProductThumb } from "@/components/products/ProductThumb";
+import { ProductDetailSlideOver } from "@/components/products/ProductDetailSlideOver";
 
 const DashboardAoVivo = () => {
   const formatBRLNoSpace = (value: number): string =>
@@ -28,10 +31,16 @@ const DashboardAoVivo = () => {
 
   const formatPct1 = (value: number): string => `${value.toFixed(1).replace(".", ",")}%`;
 
-  const truncate10 = (value: string): string => {
+  const truncate60 = (value: string): string => {
     const s = String(value ?? "");
-    if (s.length <= 10) return s;
-    return `${s.slice(0, 7)}...`;
+    if (s.length <= 60) return s;
+    return `${s.slice(0, 57)}...`;
+  };
+
+  const truncate50 = (value: string): string => {
+    const s = String(value ?? "");
+    if (s.length <= 50) return s;
+    return `${s.slice(0, 47)}...`;
   };
 
   const hexToRgba = (hex: string, alpha: number): string => {
@@ -84,6 +93,7 @@ const DashboardAoVivo = () => {
     orders: number;
     uniqueCustomers: number;
     itemsSold: number;
+    skusCount: number;
     avgTicket: number;
     cartItemsAdded: number;
     conversionPct: number;
@@ -91,6 +101,7 @@ const DashboardAoVivo = () => {
   type LiveResponse = {
     today: string;
     currentHour: number;
+    isLive?: boolean;
     projection: { projectedTodayTotal: number };
     kpis: {
       today: LiveKpis;
@@ -101,12 +112,42 @@ const DashboardAoVivo = () => {
       d28: LiveKpis;
     };
     hourly: HourlyRow[];
-    topProducts: { sku: string; name: string | null; qty: number; revenue: number }[];
+    topProducts: { productId: number | null; sku: string; name: string | null; photo?: string | null; url?: string | null; qty: number; revenue: number }[];
     byMarketplace: { id: string; value: number }[];
+    byMarketplaceTable?: { id: string; revenue: number; ordersCount: number; avgTicket: number }[];
+    byMarketplaceTableByPeriod?: {
+      today: { id: string; revenue: number; ordersCount: number; avgTicket: number }[];
+      yesterday: { id: string; revenue: number; ordersCount: number; avgTicket: number }[];
+      d7: { id: string; revenue: number; ordersCount: number; avgTicket: number }[];
+      d14: { id: string; revenue: number; ordersCount: number; avgTicket: number }[];
+      d21: { id: string; revenue: number; ordersCount: number; avgTicket: number }[];
+      d28: { id: string; revenue: number; ordersCount: number; avgTicket: number }[];
+    };
+    byCategoryTable?: { id: string; revenue: number; ordersCount: number; avgTicket: number }[];
+    byCategoryTableByPeriod?: {
+      today: { id: string; revenue: number; ordersCount: number; avgTicket: number }[];
+      yesterday: { id: string; revenue: number; ordersCount: number; avgTicket: number }[];
+      d7: { id: string; revenue: number; ordersCount: number; avgTicket: number }[];
+      d14: { id: string; revenue: number; ordersCount: number; avgTicket: number }[];
+      d21: { id: string; revenue: number; ordersCount: number; avgTicket: number }[];
+      d28: { id: string; revenue: number; ordersCount: number; avgTicket: number }[];
+    };
+    byStateTable?: { id: string; revenue: number; ordersCount: number; avgTicket: number }[];
+    byStateTableByPeriod?: {
+      today: { id: string; revenue: number; ordersCount: number; avgTicket: number }[];
+      yesterday: { id: string; revenue: number; ordersCount: number; avgTicket: number }[];
+      d7: { id: string; revenue: number; ordersCount: number; avgTicket: number }[];
+      d14: { id: string; revenue: number; ordersCount: number; avgTicket: number }[];
+      d21: { id: string; revenue: number; ordersCount: number; avgTicket: number }[];
+      d28: { id: string; revenue: number; ordersCount: number; avgTicket: number }[];
+    };
+    byProductTable?: { productId: number | null; sku: string; name: string | null; revenue: number; ordersCount: number; avgTicket: number }[];
+    byProductTableD1?: { productId: number | null; sku: string; name: string | null; revenue: number; ordersCount: number; avgTicket: number }[];
     byCategory: { id: string; value: number }[];
     byState: { id: string; value: number }[];
   };
   const [live, setLive] = useState<LiveResponse | null>(null);
+  const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
   const [liveLoading, setLiveLoading] = useState(false);
   const [liveError, setLiveError] = useState<string | null>(null);
   const d7Label = "D-7";
@@ -116,6 +157,11 @@ const DashboardAoVivo = () => {
   type ComparePeriod = "Ontem" | "D-7" | "D-14" | "D-21" | "D-28";
   const [comparePeriod, setComparePeriod] = useState<ComparePeriod>("D-7");
 
+  const pad2 = (n: number) => String(n).padStart(2, "0");
+  const toISO = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  const [day, setDay] = useState<string>(() => toISO(new Date()));
+
+  const isLive = Boolean(live?.isLive);
   const projectedTodayTotal = live?.projection?.projectedTodayTotal ?? 0;
   const todaySoFar = live?.kpis?.today?.revenueSoFar ?? 0;
 
@@ -291,6 +337,7 @@ const DashboardAoVivo = () => {
     for (const c of categories) qs.append("category", c);
     for (const st of states) qs.append("state", st);
     for (const city of cities) qs.append("city", city);
+    if (day) qs.set("day", day);
 
     fetch(buildApiUrl(`/companies/me/dashboard/live/overview?${qs.toString()}`), {
       headers: { ...getAuthHeaders() },
@@ -312,7 +359,7 @@ const DashboardAoVivo = () => {
       .finally(() => setLiveLoading(false));
 
     return () => ac.abort();
-  }, [filters, stores, channels, categories, states, cities]);
+  }, [filters, stores, channels, categories, states, cities, day]);
 
   const apiHour = live?.currentHour;
   const currentHourLabel = String(Number.isInteger(apiHour) ? apiHour : currentHour).padStart(2, "0");
@@ -328,6 +375,8 @@ const DashboardAoVivo = () => {
     }
     return pts;
   };
+
+  const compareLabelForPeriod = (p: ComparePeriod): string => (p === "Ontem" ? "D-1" : p);
 
   const lineData = useMemo(() => {
     const rows = live?.hourly || [];
@@ -355,18 +404,33 @@ const DashboardAoVivo = () => {
         : lastWeekSameDay.map((p) => ({ ...p, y: 0 }));
 
     const todayActual = todayFull.map((p, idx) => ({ x: p.x, y: idx <= hNow ? p.y : null }));
-    const todayProjection = projScaled.map((p, idx) => ({ x: p.x, y: idx >= hNow ? p.y : null }));
+    // Projeção deve "colar" no Hoje até a hora atual (mesmo valor inicial),
+    // e seguir sozinha depois (usando a curva projetada).
+    const todayProjection = projScaled.map((p, idx) => ({
+      x: p.x,
+      y: idx <= hNow ? (todayFull[idx]?.y ?? 0) : p.y,
+    }));
+
+    const compareDay =
+      comparePeriod === "Ontem"
+        ? yesterday
+        : comparePeriod === "D-7"
+          ? d7
+          : comparePeriod === "D-14"
+            ? d14
+            : comparePeriod === "D-21"
+              ? d21
+              : d28;
+    const compareSeriesId =
+      comparePeriod === "Ontem" ? "D-1" : comparePeriod === "D-7" ? d7Label : comparePeriod === "D-14" ? d14Label : comparePeriod === "D-21" ? d21Label : d28Label;
+    const compareSeriesData = compareDay ? buildHourly(rows, compareDay) : todayFull.map((p) => ({ ...p, y: 0 }));
 
     return [
       { id: "Hoje", data: todayActual },
-      { id: "Hoje (projeção)", data: todayProjection },
-      { id: "Ontem", data: yesterday ? buildHourly(rows, yesterday) : todayFull.map((p) => ({ ...p, y: 0 })) },
-      { id: d7Label, data: d7 ? lastWeekSameDay : todayFull.map((p) => ({ ...p, y: 0 })) },
-      { id: d14Label, data: d14 ? buildHourly(rows, d14) : todayFull.map((p) => ({ ...p, y: 0 })) },
-      { id: d21Label, data: d21 ? buildHourly(rows, d21) : todayFull.map((p) => ({ ...p, y: 0 })) },
-      { id: d28Label, data: d28 ? buildHourly(rows, d28) : todayFull.map((p) => ({ ...p, y: 0 })) },
+      ...(isLive ? [{ id: "Hoje (projeção)", data: todayProjection }] : []),
+      { id: compareSeriesId, data: compareSeriesData },
     ];
-  }, [live, apiHour, currentHour, d7Label, d14Label, d21Label, d28Label, projectedTodayTotalF, todaySoFarF]);
+  }, [live, apiHour, currentHour, d7Label, d14Label, d21Label, d28Label, projectedTodayTotalF, todaySoFarF, comparePeriod, isLive]);
 
   const dashedProjectionLayer = (props: any) => {
     const serie = props.series?.find((s: any) => s.id === "Hoje (projeção)");
@@ -391,7 +455,16 @@ const DashboardAoVivo = () => {
 
   const topProducts = useMemo(() => {
     const rows = live?.topProducts || [];
-    return rows.map((r) => ({ name: String(r.name ?? r.sku ?? ""), qty: Number(r.qty ?? 0) || 0, revenue: Number(r.revenue ?? 0) || 0 }));
+    return rows
+      .map((r) => ({
+        productId: Number((r as any)?.productId ?? 0) || null,
+        name: String(r.name ?? r.sku ?? ""),
+        photo: (r as any)?.photo ?? null,
+        url: (r as any)?.url ?? null,
+        qty: Number(r.qty ?? 0) || 0,
+        revenue: Number(r.revenue ?? 0) || 0,
+      }))
+      .slice(0, 5);
   }, [live]);
 
   const kpis = useMemo(() => {
@@ -402,6 +475,7 @@ const DashboardAoVivo = () => {
       orders: Number(t?.orders ?? 0) || 0,
       conversionPct: Number(t?.conversionPct ?? 0) || 0,
       itemsSold: Number(t?.itemsSold ?? 0) || 0,
+      skusCount: Number((t as any)?.skusCount ?? 0) || 0,
       avgTicket: Number(t?.avgTicket ?? 0) || 0,
     };
   }, [live]);
@@ -423,15 +497,299 @@ const DashboardAoVivo = () => {
       orders: Number(src?.orders ?? 0) || 0,
       conversionPct: Number(src?.conversionPct ?? 0) || 0,
       itemsSold: Number(src?.itemsSold ?? 0) || 0,
+      skusCount: Number((src as any)?.skusCount ?? 0) || 0,
       avgTicket: Number(src?.avgTicket ?? 0) || 0,
     };
   }, [live, comparePeriod]);
+
+  const formatPct = (v: number | null) => {
+    if (v === null || !Number.isFinite(v)) return "—";
+    return new Intl.NumberFormat("pt-BR", { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(v);
+  };
+
+  const growthBadgeClass = (v: number | null) => {
+    if (v === null || !Number.isFinite(v)) return "border-slate-200 bg-slate-50 text-slate-700";
+    if (v > 0) return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    if (v < 0) return "border-rose-200 bg-rose-50 text-rose-700";
+    return "border-slate-200 bg-slate-50 text-slate-700";
+  };
+
+  const calcGrowth = (prev: number): number | null => {
+    const cur = Number(live?.kpis?.today?.revenueSoFar ?? 0) || 0;
+    const p = Number(prev ?? 0) || 0;
+    if (p <= 0) return null;
+    return (cur - p) / p;
+  };
+
+  const growthRows = useMemo(() => {
+    const y = Number(live?.kpis?.yesterday?.revenueSoFar ?? 0) || 0;
+    const d7 = Number(live?.kpis?.d7?.revenueSoFar ?? 0) || 0;
+    const d14 = Number(live?.kpis?.d14?.revenueSoFar ?? 0) || 0;
+    const d21 = Number(live?.kpis?.d21?.revenueSoFar ?? 0) || 0;
+    const d28 = Number(live?.kpis?.d28?.revenueSoFar ?? 0) || 0;
+    return [
+      { label: "D-1", period: "Ontem" as ComparePeriod, value: calcGrowth(y) },
+      { label: "D-7", period: "D-7" as ComparePeriod, value: calcGrowth(d7) },
+      { label: "D-14", period: "D-14" as ComparePeriod, value: calcGrowth(d14) },
+      { label: "D-21", period: "D-21" as ComparePeriod, value: calcGrowth(d21) },
+      { label: "D-28", period: "D-28" as ComparePeriod, value: calcGrowth(d28) },
+    ];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live?.kpis?.today?.revenueSoFar, live?.kpis?.yesterday?.revenueSoFar, live?.kpis?.d7?.revenueSoFar, live?.kpis?.d14?.revenueSoFar, live?.kpis?.d21?.revenueSoFar, live?.kpis?.d28?.revenueSoFar]);
 
   const pieByCategory = useMemo(() => (live?.byCategory || []).map((d) => ({ id: d.id, label: d.id, value: d.value })), [live]);
 
   const BAR_ORANGE = "#FF751A";
 
   const pieByMarketplace = useMemo(() => (live?.byMarketplace || []).map((d) => ({ id: d.id, label: d.id, value: d.value })), [live]);
+  const marketplaceTable = useMemo(() => {
+    const rows = (live as any)?.byMarketplaceTable;
+    return Array.isArray(rows) ? rows : [];
+  }, [live]);
+
+  const marketplaceTableByPeriod = useMemo(() => {
+    const obj = (live as any)?.byMarketplaceTableByPeriod;
+    return obj && typeof obj === "object" ? obj : null;
+  }, [live]);
+
+  const categoryTable = useMemo(() => {
+    const rows = (live as any)?.byCategoryTable;
+    return Array.isArray(rows) ? rows : [];
+  }, [live]);
+  const categoryTableByPeriod = useMemo(() => {
+    const obj = (live as any)?.byCategoryTableByPeriod;
+    return obj && typeof obj === "object" ? obj : null;
+  }, [live]);
+  const stateTable = useMemo(() => {
+    const rows = (live as any)?.byStateTable;
+    return Array.isArray(rows) ? rows : [];
+  }, [live]);
+  const stateTableByPeriod = useMemo(() => {
+    const obj = (live as any)?.byStateTableByPeriod;
+    return obj && typeof obj === "object" ? obj : null;
+  }, [live]);
+
+  const productTable = useMemo(() => {
+    const rows = (live as any)?.byProductTable;
+    return Array.isArray(rows) ? rows : [];
+  }, [live]);
+  const productTableD1 = useMemo(() => {
+    const rows = (live as any)?.byProductTableD1;
+    return Array.isArray(rows) ? rows : [];
+  }, [live]);
+
+  const compareKey =
+    comparePeriod === "Ontem"
+      ? "yesterday"
+      : comparePeriod === "D-7"
+        ? "d7"
+        : comparePeriod === "D-14"
+          ? "d14"
+          : comparePeriod === "D-21"
+            ? "d21"
+            : "d28";
+
+  const compareLabelShort = compareLabelForPeriod(comparePeriod); // "D-1" | "D-7" | ...
+
+  // precisa ser function (ou vir antes) para evitar TDZ quando usado nos builders de linhas
+  function pctChange(cur: number, prev: number): number | null {
+    const p = Number(prev || 0);
+    if (p <= 0) return null;
+    return (Number(cur || 0) - p) / p;
+  }
+
+  type SortDir = "asc" | "desc";
+  type TableSortKey = "id" | "revenue" | "revenueDelta" | "prevRevenue" | "avgTicket" | "ticketDelta" | "prevAvgTicket";
+  type TableSort = { key: TableSortKey; dir: SortDir };
+
+  const sortIndicator = (sort: TableSort, key: TableSortKey) => (sort.key === key ? (sort.dir === "asc" ? "▲" : "▼") : "");
+
+  const toggleSort = (set: (v: TableSort) => void, cur: TableSort, key: TableSortKey) => {
+    if (cur.key === key) set({ key, dir: cur.dir === "asc" ? "desc" : "asc" });
+    else set({ key, dir: "desc" });
+  };
+
+  const sortRows = <T extends { id: string }>(
+    rows: T[],
+    sort: TableSort,
+    getNumber: (row: T, key: TableSortKey) => number | null,
+  ): T[] => {
+    const dirMul = sort.dir === "asc" ? 1 : -1;
+    const out = [...rows];
+    out.sort((a, b) => {
+      if (sort.key === "id") return String(a.id).localeCompare(String(b.id), "pt-BR") * dirMul;
+      const av = getNumber(a, sort.key);
+      const bv = getNumber(b, sort.key);
+      const aNull = av === null || !Number.isFinite(av);
+      const bNull = bv === null || !Number.isFinite(bv);
+      if (aNull && bNull) return 0;
+      if (aNull) return 1; // null sempre por último
+      if (bNull) return -1;
+      return (Number(av) - Number(bv)) * dirMul;
+    });
+    return out;
+  };
+
+  const [marketplaceSort, setMarketplaceSort] = useState<TableSort>({ key: "revenue", dir: "desc" });
+  const [stateSort, setStateSort] = useState<TableSort>({ key: "revenue", dir: "desc" });
+  const [categorySort, setCategorySort] = useState<TableSort>({ key: "revenue", dir: "desc" });
+  const [productSort, setProductSort] = useState<TableSort>({ key: "revenue", dir: "desc" });
+
+  type TableRow = {
+    id: string;
+    revenue: number;
+    prevRevenue: number;
+    revenueDelta: number | null;
+    avgTicket: number;
+    prevAvgTicket: number;
+    ticketDelta: number | null;
+  };
+
+  const buildRowsWithPrev = (list: any[], prevList: any[] | undefined): TableRow[] => {
+    const prevMap = new Map<string, any>((prevList || []).map((p: any) => [String(p.id), p]));
+    return (list || []).map((r: any) => {
+      const prev = prevMap.get(String(r.id));
+      const revenue = Number(r.revenue || 0) || 0;
+      const prevRevenue = Number(prev?.revenue || 0) || 0;
+      const avgTicket = Number(r.avgTicket || 0) || 0;
+      const prevAvgTicket = Number(prev?.avgTicket || 0) || 0;
+      return {
+        id: String(r.id),
+        revenue,
+        prevRevenue,
+        revenueDelta: pctChange(revenue, prevRevenue),
+        avgTicket,
+        prevAvgTicket,
+        ticketDelta: pctChange(avgTicket, prevAvgTicket),
+      };
+    });
+  };
+
+  const marketplaceRows = useMemo(() => {
+    const prevList = marketplaceTableByPeriod?.[compareKey] as any[] | undefined;
+    return buildRowsWithPrev(marketplaceTable, prevList);
+  }, [marketplaceTable, marketplaceTableByPeriod, compareKey]);
+
+  const stateRows = useMemo(() => {
+    const prevList = (stateTableByPeriod as any)?.[compareKey] as any[] | undefined;
+    return buildRowsWithPrev(stateTable, prevList);
+  }, [stateTable, stateTableByPeriod, compareKey]);
+
+  const categoryRows = useMemo(() => {
+    const prevList = (categoryTableByPeriod as any)?.[compareKey] as any[] | undefined;
+    return buildRowsWithPrev(categoryTable, prevList);
+  }, [categoryTable, categoryTableByPeriod, compareKey]);
+
+  const marketplaceRowsSorted = useMemo(
+    () =>
+      sortRows(marketplaceRows, marketplaceSort, (row: TableRow, key) => {
+        const r = row as any;
+        if (key === "revenue") return r.revenue;
+        if (key === "prevRevenue") return r.prevRevenue;
+        if (key === "revenueDelta") return r.revenueDelta;
+        if (key === "avgTicket") return r.avgTicket;
+        if (key === "prevAvgTicket") return r.prevAvgTicket;
+        if (key === "ticketDelta") return r.ticketDelta;
+        return null;
+      }),
+    [marketplaceRows, marketplaceSort],
+  );
+
+  const stateRowsSorted = useMemo(
+    () =>
+      sortRows(stateRows, stateSort, (row: TableRow, key) => {
+        const r = row as any;
+        if (key === "revenue") return r.revenue;
+        if (key === "prevRevenue") return r.prevRevenue;
+        if (key === "revenueDelta") return r.revenueDelta;
+        if (key === "avgTicket") return r.avgTicket;
+        if (key === "prevAvgTicket") return r.prevAvgTicket;
+        if (key === "ticketDelta") return r.ticketDelta;
+        return null;
+      }),
+    [stateRows, stateSort],
+  );
+
+  const categoryRowsSorted = useMemo(
+    () =>
+      sortRows(categoryRows, categorySort, (row: TableRow, key) => {
+        const r = row as any;
+        if (key === "revenue") return r.revenue;
+        if (key === "prevRevenue") return r.prevRevenue;
+        if (key === "revenueDelta") return r.revenueDelta;
+        if (key === "avgTicket") return r.avgTicket;
+        if (key === "prevAvgTicket") return r.prevAvgTicket;
+        if (key === "ticketDelta") return r.ticketDelta;
+        return null;
+      }),
+    [categoryRows, categorySort],
+  );
+
+  type ProductTableRow = {
+    productId: number | null;
+    sku: string;
+    name: string;
+    revenue: number;
+    prevRevenue: number;
+    revenueDelta: number | null;
+    avgTicket: number;
+    prevAvgTicket: number;
+    ticketDelta: number | null;
+  };
+
+  const productRows = useMemo(() => {
+    const prevMap = new Map<string, any>(productTableD1.map((p: any) => [String(p.sku), p]));
+    return productTable.map((r: any) => {
+      const prev = prevMap.get(String(r.sku));
+      const revenue = Number(r.revenue || 0) || 0;
+      const prevRevenue = Number(prev?.revenue || 0) || 0;
+      const avgTicket = Number(r.avgTicket || 0) || 0;
+      const prevAvgTicket = Number(prev?.avgTicket || 0) || 0;
+      return {
+        productId: Number(r.productId ?? 0) || null,
+        sku: String(r.sku ?? ""),
+        name: String(r.name ?? r.sku ?? ""),
+        revenue,
+        prevRevenue,
+        revenueDelta: pctChange(revenue, prevRevenue),
+        avgTicket,
+        prevAvgTicket,
+        ticketDelta: pctChange(avgTicket, prevAvgTicket),
+      } as ProductTableRow;
+    });
+  }, [productTable, productTableD1]);
+
+  const productRowsSorted = useMemo(
+    () =>
+      sortRows(
+        productRows.map((r) => ({ ...r, id: r.sku } as any)),
+        productSort,
+        (row: any, key) => {
+          if (key === "revenue") return row.revenue;
+          if (key === "prevRevenue") return row.prevRevenue;
+          if (key === "revenueDelta") return row.revenueDelta;
+          if (key === "avgTicket") return row.avgTicket;
+          if (key === "prevAvgTicket") return row.prevAvgTicket;
+          if (key === "ticketDelta") return row.ticketDelta;
+          return null;
+        },
+      ) as any[],
+    [productRows, productSort],
+  );
+
+  const formatPctSigned1 = (ratio: number | null) => {
+    if (ratio === null || !Number.isFinite(ratio)) return "—";
+    const v = ratio * 100;
+    const s = `${v >= 0 ? "+" : ""}${v.toFixed(1).replace(".", ",")}%`;
+    return s;
+  };
+
+  const deltaClass = (ratio: number | null) => {
+    if (ratio === null || !Number.isFinite(ratio)) return "text-slate-400";
+    if (ratio > 0) return "text-emerald-700";
+    if (ratio < 0) return "text-rose-700";
+    return "text-slate-700";
+  };
 
   const marketplaceColorById = useMemo(() => {
     const map = new Map<string, string>();
@@ -475,6 +833,20 @@ const DashboardAoVivo = () => {
           </Link>{" "}
           <span className="text-slate-400">/</span> Vendas ao vivo
         </div>
+        <div className="flex items-center gap-2">
+          <div className="w-[180px]">
+            <DatePicker
+              value={day}
+              onChange={(next) => {
+                const s = String(next || "").trim();
+                if (!s) return;
+                // segurança simples no front: impede selecionar futuro
+                const todayIso = toISO(new Date());
+                setDay(s > todayIso ? todayIso : s);
+              }}
+              placeholder="Selecionar dia..."
+            />
+        </div>
         <button
           type="button"
           onClick={() => setFiltersOpen(true)}
@@ -484,7 +856,8 @@ const DashboardAoVivo = () => {
           Filtros
         </button>
       </div>
-      <h1 className="text-2xl font-extrabold text-slate-900">Vendas ao vivo (Hoje)</h1>
+      </div>
+      <h1 className="text-2xl font-extrabold text-slate-900">{isLive ? "Vendas ao vivo (Hoje)" : `Vendas (${day})`}</h1>
       {liveLoading ? <div className="mt-2 text-sm text-slate-600">Carregando dados ao vivo...</div> : null}
       {!liveLoading && liveError ? <div className="mt-2 text-sm text-red-600">{liveError}</div> : null}
 
@@ -493,7 +866,8 @@ const DashboardAoVivo = () => {
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <div className="flex items-center gap-3">
-              <div className="text-sm font-semibold text-slate-600">Faturamento de hoje</div>
+              <div className="text-sm font-semibold text-slate-600">Faturamento do dia</div>
+              {isLive ? (
               <div className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-extrabold text-emerald-700">
                 <span className="relative flex h-2.5 w-2.5">
                   <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-60" />
@@ -501,50 +875,35 @@ const DashboardAoVivo = () => {
                 </span>
                 AO VIVO
               </div>
+              ) : null}
             </div>
             <div className="mt-2 text-3xl font-extrabold text-slate-900">{formatBRLNoSpace(todaySoFarF)}</div>
+            {isLive ? (
             <div className="mt-1 text-xs text-slate-600">
               Projeção de hoje: <span className="font-extrabold text-slate-900">{formatBRLNoSpace(projectedTodayTotalF)}</span>
             </div>
+            ) : null}
           </div>
 
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-            <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-              <div className="text-xs font-semibold text-slate-500">Clientes únicos</div>
-              <div className="mt-1 flex items-center justify-between gap-2">
-              <div className="text-lg font-extrabold text-slate-900">{kpis.uniqueCustomers}</div>
-                <span className="shrink-0">
-                  <DeltaBadge
-                    current={kpis.uniqueCustomers}
-                    previous={kpisPrev.uniqueCustomers}
-                    compareLabel={comparePeriod}
-                    formatValue={(n) => formatInt(Number(n))}
-                  />
-                </span>
-              </div>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-              <div className="text-xs font-semibold text-slate-500">Pedidos</div>
-              <div className="mt-1 flex items-center justify-between gap-2">
-              <div className="text-lg font-extrabold text-slate-900">{kpis.orders}</div>
-                <span className="shrink-0">
-                  <DeltaBadge current={kpis.orders} previous={kpisPrev.orders} compareLabel={comparePeriod} formatValue={(n) => formatInt(Number(n))} />
-                </span>
-              </div>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-              <div className="text-xs font-semibold text-slate-500">Ticket médio</div>
-              <div className="mt-1 flex items-center justify-between gap-2">
-              <div className="text-lg font-extrabold text-slate-900">{formatBRLNoSpace(kpis.avgTicket)}</div>
-                <span className="shrink-0">
-                  <DeltaBadge
-                    current={kpis.avgTicket}
-                    previous={kpisPrev.avgTicket}
-                    compareLabel={comparePeriod}
-                    formatValue={(n) => formatBRLNoSpace(Number(n))}
-                  />
-                </span>
-              </div>
+          <div className="w-full sm:w-[560px]">
+            <div className="text-xs font-semibold text-slate-500">Crescimento (faturamento até agora)</div>
+            <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-5">
+              {growthRows.map((g) => (
+                <button
+                  key={g.label}
+                  type="button"
+                  onClick={() => setComparePeriod(g.period)}
+                  className={[
+                    "rounded-xl border px-3 py-2 text-left transition-colors hover:brightness-[0.98]",
+                    growthBadgeClass(g.value),
+                    comparePeriod === g.period ? "ring-2 ring-slate-900/15" : "",
+                  ].join(" ")}
+                  title={`Clique para comparar o gráfico com ${g.label}`}
+                >
+                  <div className="text-[11px] font-extrabold">{g.label}</div>
+                  <div className="mt-1 text-sm font-extrabold">{formatPct(g.value)}</div>
+                </button>
+              ))}
             </div>
           </div>
         </div>
@@ -567,77 +926,34 @@ const DashboardAoVivo = () => {
             <span className="h-2.5 w-2.5 rounded-full" style={{ background: CHART_COLORS[1] }} />
             <span className="font-semibold">Hoje</span>
           </div>
-          <button
-            type="button"
-            onClick={() => setComparePeriod("Ontem")}
-            className={[
-              "inline-flex items-center gap-2 text-slate-700 hover:text-slate-900",
-              comparePeriod === "Ontem" ? "font-extrabold" : "font-semibold",
-            ].join(" ")}
-            aria-pressed={comparePeriod === "Ontem"}
-            title="Comparar os KPIs com Ontem"
-          >
-            <span className="h-2.5 w-2.5 rounded-full" style={{ background: CHART_COLORS[0] }} />
-            <span>Ontem</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setComparePeriod("D-7")}
-            className={[
-              "inline-flex items-center gap-2 text-slate-700 hover:text-slate-900",
-              comparePeriod === "D-7" ? "font-extrabold" : "font-semibold",
-            ].join(" ")}
-            aria-pressed={comparePeriod === "D-7"}
-            title="Comparar os KPIs com D-7"
-          >
-            <span className="h-2.5 w-2.5 rounded-full" style={{ background: CHART_COLORS[5] }} />
-            <span>{d7Label}</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setComparePeriod("D-14")}
-            className={[
-              "inline-flex items-center gap-2 text-slate-700 hover:text-slate-900",
-              comparePeriod === "D-14" ? "font-extrabold" : "font-semibold",
-            ].join(" ")}
-            aria-pressed={comparePeriod === "D-14"}
-            title="Comparar os KPIs com D-14"
-          >
-            <span className="h-2.5 w-2.5 rounded-full" style={{ background: CHART_COLORS[2] }} />
-            <span>{d14Label}</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setComparePeriod("D-21")}
-            className={[
-              "inline-flex items-center gap-2 text-slate-700 hover:text-slate-900",
-              comparePeriod === "D-21" ? "font-extrabold" : "font-semibold",
-            ].join(" ")}
-            aria-pressed={comparePeriod === "D-21"}
-            title="Comparar os KPIs com D-21"
-          >
-            <span className="h-2.5 w-2.5 rounded-full" style={{ background: CHART_COLORS[3] }} />
-            <span>{d21Label}</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setComparePeriod("D-28")}
-            className={[
-              "inline-flex items-center gap-2 text-slate-700 hover:text-slate-900",
-              comparePeriod === "D-28" ? "font-extrabold" : "font-semibold",
-            ].join(" ")}
-            aria-pressed={comparePeriod === "D-28"}
-            title="Comparar os KPIs com D-28"
-          >
-            <span className="h-2.5 w-2.5 rounded-full" style={{ background: CHART_COLORS[4] }} />
-            <span>{d28Label}</span>
-          </button>
           <div className="inline-flex items-center gap-2 text-slate-700">
+            <span
+              className="h-2.5 w-2.5 rounded-full"
+              style={{
+                background:
+                  comparePeriod === "Ontem"
+                    ? CHART_COLORS[0]
+                    : comparePeriod === "D-7"
+                      ? CHART_COLORS[5]
+                      : comparePeriod === "D-14"
+                        ? CHART_COLORS[2]
+                        : comparePeriod === "D-21"
+                          ? CHART_COLORS[3]
+                          : CHART_COLORS[4],
+              }}
+            />
+            <span className="font-semibold">Comparativo: {compareLabelForPeriod(comparePeriod)}</span>
+          </div>
+          <div className="inline-flex items-center gap-2 text-slate-700">
+            {isLive ? (
+              <>
             <span className="h-2.5 w-2.5 rounded-full" style={{ background: CHART_COLORS[6] }} />
             <span className="font-semibold">Hoje (projeção)</span>
+              </>
+            ) : null}
           </div>
           <div className="text-xs text-slate-500">
-            KPIs comparando com: <span className="font-semibold text-slate-700">{comparePeriod}</span>
+            Dica: clique nos cards de crescimento para trocar o comparativo.
           </div>
         </div>
 
@@ -665,7 +981,7 @@ const DashboardAoVivo = () => {
               const id = String(d.id);
               if (id === "Hoje") return CHART_COLORS[1];
               if (id === "Hoje (projeção)") return "transparent"; // desenhado via layer pontilhada
-              if (id === "Ontem") return CHART_COLORS[0];
+              if (id === "D-1") return CHART_COLORS[0];
               if (id === d7Label) return CHART_COLORS[5];
               if (id === d14Label) return CHART_COLORS[2];
               if (id === d21Label) return CHART_COLORS[3];
@@ -707,16 +1023,45 @@ const DashboardAoVivo = () => {
           <div className="text-lg font-extrabold text-slate-900">Produtos mais vendidos</div>
           <div className="mt-3 space-y-3">
             {topProducts.length ? (
-              topProducts.map((p) => (
+              topProducts.map((p, idx) => {
+                const rank = idx + 1;
+                const rankStyle =
+                  rank === 1
+                    ? "text-[#D4AF37]"
+                    : rank === 2
+                      ? "text-[#C0C0C0]"
+                      : rank === 3
+                        ? "text-[#CD7F32]"
+                        : "text-slate-400";
+                const rankSize = rank >= 4 ? "text-[18px]" : "text-[23px]";
+                return (
               <div key={p.name} className="flex items-start justify-between gap-3 border-t border-slate-200 pt-3 first:border-t-0 first:pt-0">
-                <div className="min-w-0 flex items-start gap-3">
-                  <div className="h-10 w-10 shrink-0 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-center font-extrabold text-slate-700">
-                    {String(p.name || "P").trim().charAt(0).toUpperCase()}
+                <div className="min-w-0 flex items-center gap-3">
+                  <div
+                    className={[
+                      "w-8 shrink-0 flex items-center justify-center font-extrabold leading-none",
+                      rankSize,
+                      rankStyle,
+                    ].join(" ")}
+                    title={`#${rank}`}
+                  >
+                    {rank}
                   </div>
+                  <ProductThumb
+                    name={p.name}
+                    photo={p.photo}
+                    size={40}
+                    onClick={() => (p.productId ? setSelectedProductId(p.productId) : undefined)}
+                  />
                   <div className="min-w-0">
-                      <div className="font-semibold text-slate-900 truncate" title={p.name}>
-                        {truncate10(p.name)}
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => (p.productId ? setSelectedProductId(p.productId) : undefined)}
+                        className="text-left text-[12px] font-semibold text-slate-900 truncate hover:underline"
+                        title={p.name}
+                      >
+                        {truncate60(p.name)}
+                      </button>
                     <div className="text-xs text-slate-600">{p.qty} vendidos</div>
                   </div>
                 </div>
@@ -725,7 +1070,8 @@ const DashboardAoVivo = () => {
                   <div className="font-extrabold text-slate-900">{formatBRLNoSpace(p.revenue)}</div>
                 </div>
               </div>
-              ))
+                );
+              })
             ) : (
               <div className="text-sm text-slate-500">Sem dados.</div>
             )}
@@ -782,10 +1128,70 @@ const DashboardAoVivo = () => {
           </div>
         </Card>
 
-        {/* Pizza por marketplace */}
+        {/* Clientes / Pedidos / Ticket (no lugar do marketplace) */}
           <Card className="w-full border-slate-200 bg-white p-5">
+            <div className="text-lg font-extrabold text-slate-900">Clientes, pedidos e ticket</div>
+            <div className="mt-3 grid grid-cols-1 gap-2">
+              <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                <div className="text-xs font-semibold text-slate-500">Clientes únicos</div>
+                <div className="mt-1 flex items-center justify-between gap-2">
+                  <div className="text-lg font-extrabold text-slate-900">{kpis.uniqueCustomers}</div>
+                  <span className="shrink-0">
+                    <DeltaBadge
+                      current={kpis.uniqueCustomers}
+                      previous={kpisPrev.uniqueCustomers}
+                      compareLabel={comparePeriod}
+                      formatValue={(n) => formatInt(Number(n))}
+                    />
+                  </span>
+                </div>
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                <div className="text-xs font-semibold text-slate-500">Pedidos</div>
+                <div className="mt-1 flex items-center justify-between gap-2">
+                  <div className="text-lg font-extrabold text-slate-900">{kpis.orders}</div>
+                  <span className="shrink-0">
+                    <DeltaBadge current={kpis.orders} previous={kpisPrev.orders} compareLabel={comparePeriod} formatValue={(n) => formatInt(Number(n))} />
+                  </span>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                <div className="text-xs font-semibold text-slate-500">SKUs</div>
+                <div className="mt-1 flex items-center justify-between gap-2">
+                  <div className="text-lg font-extrabold text-slate-900">{kpis.skusCount}</div>
+                  <span className="shrink-0">
+                    <DeltaBadge current={kpis.skusCount} previous={kpisPrev.skusCount} compareLabel={comparePeriod} formatValue={(n) => formatInt(Number(n))} />
+                  </span>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                <div className="text-xs font-semibold text-slate-500">Ticket médio</div>
+                <div className="mt-1 flex items-center justify-between gap-2">
+                  <div className="text-lg font-extrabold text-slate-900">{formatBRLNoSpace(kpis.avgTicket)}</div>
+                  <span className="shrink-0">
+                    <DeltaBadge
+                      current={kpis.avgTicket}
+                      previous={kpisPrev.avgTicket}
+                      compareLabel={comparePeriod}
+                      formatValue={(n) => formatBRLNoSpace(Number(n))}
+                    />
+                  </span>
+                </div>
+              </div>
+            </div>
+          </Card>
+        </div>
+      </div>
+
+      <ProductDetailSlideOver open={!!selectedProductId} productId={selectedProductId} onClose={() => setSelectedProductId(null)} />
+
+      {/* Nova linha: marketplace + tabela */}
+      <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-12">
+        <Card className="w-full border-slate-200 bg-white p-5 lg:col-span-4">
           <div className="text-lg font-extrabold text-slate-900">Faturamento por marketplace</div>
-          <div className="mt-3" style={{ height: 280 }}>
+          <div className="mt-3" style={{ height: 300 }}>
             {pieByMarketplace.length ? (
             <ResponsivePie
               data={pieByMarketplace as any}
@@ -824,66 +1230,93 @@ const DashboardAoVivo = () => {
             </div>
           ) : null}
         </Card>
-        </div>
+
+        <Card className="w-full border-slate-200 bg-white p-5 lg:col-span-8">
+          <div className="text-lg font-extrabold text-slate-900">Marketplaces</div>
+          <div className="mt-3 overflow-hidden rounded-xl border border-slate-200">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-slate-50 text-xs font-extrabold text-slate-700">
+                <tr>
+                  <th className="px-4 py-3">
+                    <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setMarketplaceSort, marketplaceSort, "id")}>
+                      Marketplace <span className="text-[10px]">{sortIndicator(marketplaceSort, "id")}</span>
+                    </button>
+                  </th>
+                  <th className="px-4 py-3">
+                    <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setMarketplaceSort, marketplaceSort, "revenue")}>
+                      Total <span className="text-[10px]">{sortIndicator(marketplaceSort, "revenue")}</span>
+                    </button>
+                  </th>
+                  <th className="px-4 py-3">
+                    <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setMarketplaceSort, marketplaceSort, "revenueDelta")}>
+                      Var. <span className="text-[10px]">{sortIndicator(marketplaceSort, "revenueDelta")}</span>
+                    </button>
+                  </th>
+                  <th className="px-4 py-3">
+                    <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setMarketplaceSort, marketplaceSort, "prevRevenue")}>
+                      Total {compareLabelShort} <span className="text-[10px]">{sortIndicator(marketplaceSort, "prevRevenue")}</span>
+                    </button>
+                  </th>
+                  <th className="px-4 py-3">
+                    <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setMarketplaceSort, marketplaceSort, "avgTicket")}>
+                      Ticket médio <span className="text-[10px]">{sortIndicator(marketplaceSort, "avgTicket")}</span>
+                    </button>
+                  </th>
+                  <th className="px-4 py-3">
+                    <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setMarketplaceSort, marketplaceSort, "ticketDelta")}>
+                      Var. <span className="text-[10px]">{sortIndicator(marketplaceSort, "ticketDelta")}</span>
+                    </button>
+                  </th>
+                  <th className="px-4 py-3">
+                    <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setMarketplaceSort, marketplaceSort, "prevAvgTicket")}>
+                      Ticket {compareLabelShort} <span className="text-[10px]">{sortIndicator(marketplaceSort, "prevAvgTicket")}</span>
+                    </button>
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {marketplaceRowsSorted.length ? (
+                  marketplaceRowsSorted.map((r: any) => {
+                    const revDelta = r.revenueDelta as number | null;
+                    const ticketDelta = r.ticketDelta as number | null;
+                    return (
+                    <tr
+                      key={String(r.id)}
+                      className="bg-white hover:bg-slate-50"
+                      onClick={() => toggleSingle(setChannels, channels, String(r.id))}
+                      style={{ cursor: "pointer" }}
+                      title="Clique para filtrar por marketplace"
+                    >
+                      <td className="px-4 py-3 font-semibold text-slate-900">{String(r.id)}</td>
+                      <td className="px-4 py-3 text-slate-700">{formatBRLNoSpace(Number(r.revenue || 0))}</td>
+                      <td className={["px-4 py-3 text-xs font-extrabold", deltaClass(revDelta)].join(" ")}>
+                        {formatPctSigned1(revDelta)}
+                      </td>
+                      <td className="px-4 py-3 text-slate-700">{formatBRLNoSpace(Number(r.prevRevenue || 0))}</td>
+                      <td className="px-4 py-3 text-slate-700">{formatBRLNoSpace(Number(r.avgTicket || 0))}</td>
+                      <td className={["px-4 py-3 text-xs font-extrabold", deltaClass(ticketDelta)].join(" ")}>
+                        {formatPctSigned1(ticketDelta)}
+                      </td>
+                      <td className="px-4 py-3 text-slate-700">{formatBRLNoSpace(Number(r.prevAvgTicket || 0))}</td>
+                    </tr>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td className="px-4 py-3 text-slate-600" colSpan={7}>
+                      Sem dados.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
       </div>
 
-      {/* 3ª linha */}
+      {/* 3ª linha: Estado (mapa + tabela) */}
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-12">
-        {/* Barras por categoria (clicável) */}
-        <Card className="w-full border-slate-200 bg-white p-5 lg:col-span-6">
-          <div className="text-lg font-extrabold text-slate-900">Faturamento por categoria</div>
-          <div className="mt-3" style={{ height: 320 }}>
-            {pieByCategory.length ? (
-            <ResponsiveBar
-              data={pieByCategory.map((d) => ({ categoria: String(d.id), faturamento: Number(d.value) })) as any}
-              keys={["faturamento"]}
-              indexBy="categoria"
-              margin={{ top: 10, right: 16, bottom: 70, left: 92 }}
-              padding={0.35}
-              colors={({ indexValue }: any) => {
-                const id = String(indexValue ?? "");
-                const hasActive = categories.length === 1;
-                if (hasActive && categories[0] !== id) return hexToRgba(BAR_ORANGE, 0.2);
-                return BAR_ORANGE;
-              }}
-              borderRadius={6}
-              enableGridX={false}
-              enableGridY={true}
-              axisLeft={{
-                format: (v) => formatBRLCompact(Number(v)),
-                legend: "",
-              }}
-              axisBottom={{
-                tickRotation: -25,
-                tickPadding: 10,
-              }}
-              enableLabel={false}
-              tooltip={({ indexValue, value }: any) => (
-                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 shadow-xl">
-                  <div className="font-extrabold">{String(indexValue)}</div>
-                  <div>{formatBRLNoSpace(Number(value))}</div>
-                </div>
-              )}
-              theme={{
-                axis: { ticks: { text: { fill: "#475569" } }, legend: { text: { fill: "#334155", fontWeight: 700 } } },
-                grid: { line: { stroke: "#E2E8F0" } },
-                tooltip: { container: { background: "#fff", color: "#0f172a", fontSize: 12, borderRadius: 12 } },
-              }}
-              onClick={(bar: any) => toggleSingle(setCategories, categories, String(bar?.indexValue ?? ""))}
-            />
-            ) : (
-              <div className="flex h-full items-center justify-center text-sm text-slate-500">Sem dados.</div>
-            )}
-          </div>
-          {categories.length ? (
-            <div className="mt-2 text-xs text-slate-600">
-              Categoria ativa: <span className="font-semibold text-slate-900">{categories.join(", ")}</span>
-            </div>
-          ) : null}
-        </Card>
-
-      {/* Mapa por estado */}
-        <Card className="w-full border-slate-200 bg-white p-5 lg:col-span-6">
+        <Card className="w-full border-slate-200 bg-white p-5 lg:col-span-4">
         <div className="text-lg font-extrabold text-slate-900">Vendas por estado</div>
           <div className="mt-3 relative w-full" style={{ height: mapHeight }} ref={mapWrapRef}>
             {geoFeatures.length > 0 && mapWidth > 0 && mapPath ? (
@@ -941,7 +1374,311 @@ const DashboardAoVivo = () => {
             )}
         </div>
       </Card>
+
+        <Card className="w-full border-slate-200 bg-white p-5 lg:col-span-8">
+          <div className="text-lg font-extrabold text-slate-900">Estados</div>
+          <div className="mt-1 text-xs text-slate-500">
+            Comparando com: <span className="font-semibold text-slate-700">{compareLabelForPeriod(comparePeriod)}</span>
+          </div>
+          <div className="mt-3 overflow-hidden rounded-xl border border-slate-200">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-slate-50 text-xs font-extrabold text-slate-700">
+                <tr>
+                  <th className="px-4 py-3">
+                    <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setStateSort, stateSort, "id")}>
+                      Estado <span className="text-[10px]">{sortIndicator(stateSort, "id")}</span>
+                    </button>
+                  </th>
+                  <th className="px-4 py-3">
+                    <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setStateSort, stateSort, "revenue")}>
+                      Faturamento <span className="text-[10px]">{sortIndicator(stateSort, "revenue")}</span>
+                    </button>
+                  </th>
+                  <th className="px-4 py-3">
+                    <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setStateSort, stateSort, "revenueDelta")}>
+                      Variação <span className="text-[10px]">{sortIndicator(stateSort, "revenueDelta")}</span>
+                    </button>
+                  </th>
+                  <th className="px-4 py-3">
+                    <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setStateSort, stateSort, "prevRevenue")}>
+                      Faturamento {compareLabelShort} <span className="text-[10px]">{sortIndicator(stateSort, "prevRevenue")}</span>
+                    </button>
+                  </th>
+                  <th className="px-4 py-3">
+                    <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setStateSort, stateSort, "avgTicket")}>
+                      Ticket médio <span className="text-[10px]">{sortIndicator(stateSort, "avgTicket")}</span>
+                    </button>
+                  </th>
+                  <th className="px-4 py-3">
+                    <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setStateSort, stateSort, "ticketDelta")}>
+                      Variação <span className="text-[10px]">{sortIndicator(stateSort, "ticketDelta")}</span>
+                    </button>
+                  </th>
+                  <th className="px-4 py-3">
+                    <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setStateSort, stateSort, "prevAvgTicket")}>
+                      Ticket {compareLabelShort} <span className="text-[10px]">{sortIndicator(stateSort, "prevAvgTicket")}</span>
+                    </button>
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {stateRowsSorted.length ? (
+                  stateRowsSorted.map((r: any) => {
+                    const revDelta = r.revenueDelta as number | null;
+                    const ticketDelta = r.ticketDelta as number | null;
+                    return (
+                      <tr
+                        key={String(r.id)}
+                        className="bg-white hover:bg-slate-50"
+                        onClick={() => toggleSingle(setStates, states, String(r.id))}
+                        style={{ cursor: "pointer" }}
+                        title="Clique para filtrar por estado"
+                      >
+                        <td className="px-4 py-3 font-semibold text-slate-900">{String(r.id)}</td>
+                        <td className="px-4 py-3 text-slate-700">{formatBRLNoSpace(Number(r.revenue || 0))}</td>
+                        <td className={["px-4 py-3 text-xs font-extrabold", deltaClass(revDelta)].join(" ")}>{formatPctSigned1(revDelta)}</td>
+                        <td className="px-4 py-3 text-slate-700">{formatBRLNoSpace(Number(r.prevRevenue || 0))}</td>
+                        <td className="px-4 py-3 text-slate-700">{formatBRLNoSpace(Number(r.avgTicket || 0))}</td>
+                        <td className={["px-4 py-3 text-xs font-extrabold", deltaClass(ticketDelta)].join(" ")}>{formatPctSigned1(ticketDelta)}</td>
+                        <td className="px-4 py-3 text-slate-700">{formatBRLNoSpace(Number(r.prevAvgTicket || 0))}</td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td className="px-4 py-3 text-slate-600" colSpan={7}>
+                      Sem dados.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
       </div>
+
+      {/* 4ª linha: Categoria (gráfico + tabela) */}
+      <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-12">
+        <Card className="w-full border-slate-200 bg-white p-5 lg:col-span-4">
+          <div className="text-lg font-extrabold text-slate-900">Faturamento por categoria</div>
+          <div className="mt-3" style={{ height: 320 }}>
+            {pieByCategory.length ? (
+              <ResponsiveBar
+                data={pieByCategory.map((d) => ({ categoria: String(d.id), faturamento: Number(d.value) })) as any}
+                keys={["faturamento"]}
+                indexBy="categoria"
+                layout="horizontal"
+                margin={{ top: 10, right: 44, bottom: 40, left: 12 }}
+                padding={0.35}
+                colors={({ indexValue }: any) => {
+                  const id = String(indexValue ?? "");
+                  const hasActive = categories.length === 1;
+                  if (hasActive && categories[0] !== id) return hexToRgba(BAR_ORANGE, 0.2);
+                  return BAR_ORANGE;
+                }}
+                borderRadius={6}
+                enableGridX={false}
+                enableGridY={true}
+                axisLeft={null}
+                axisBottom={{
+                  format: (v) => formatBRLCompact(Number(v)),
+                  tickPadding: 8,
+                  tickRotation: -20,
+                }}
+                enableLabel={true}
+                label={(d: any) => String(d.indexValue ?? "")}
+                labelSkipWidth={12}
+                labelTextColor={{ from: "color", modifiers: [["darker", 6]] }}
+                tooltip={({ indexValue, value }: any) => (
+                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 shadow-xl">
+                    <div className="font-extrabold">{String(indexValue)}</div>
+                    <div>{formatBRLNoSpace(Number(value))}</div>
+                  </div>
+                )}
+                theme={{
+                  axis: { ticks: { text: { fill: "#475569" } }, legend: { text: { fill: "#334155", fontWeight: 700 } } },
+                  grid: { line: { stroke: "#E2E8F0" } },
+                  tooltip: { container: { background: "#fff", color: "#0f172a", fontSize: 12, borderRadius: 12 } },
+                }}
+                onClick={(bar: any) => toggleSingle(setCategories, categories, String(bar?.indexValue ?? ""))}
+              />
+            ) : (
+              <div className="flex h-full items-center justify-center text-sm text-slate-500">Sem dados.</div>
+            )}
+          </div>
+          {categories.length ? (
+            <div className="mt-2 text-xs text-slate-600">
+              Categoria ativa: <span className="font-semibold text-slate-900">{categories.join(", ")}</span>
+            </div>
+          ) : null}
+        </Card>
+
+        <Card className="w-full border-slate-200 bg-white p-5 lg:col-span-8">
+          <div className="text-lg font-extrabold text-slate-900">Categorias</div>
+          <div className="mt-1 text-xs text-slate-500">
+            Comparando com: <span className="font-semibold text-slate-700">{compareLabelForPeriod(comparePeriod)}</span>
+          </div>
+          <div className="mt-3 overflow-hidden rounded-xl border border-slate-200">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-slate-50 text-xs font-extrabold text-slate-700">
+                <tr>
+                  <th className="px-4 py-3">
+                    <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setCategorySort, categorySort, "id")}>
+                      Categoria <span className="text-[10px]">{sortIndicator(categorySort, "id")}</span>
+                    </button>
+                  </th>
+                  <th className="px-4 py-3">
+                    <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setCategorySort, categorySort, "revenue")}>
+                      Faturamento <span className="text-[10px]">{sortIndicator(categorySort, "revenue")}</span>
+                    </button>
+                  </th>
+                  <th className="px-4 py-3">
+                    <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setCategorySort, categorySort, "revenueDelta")}>
+                      Var. <span className="text-[10px]">{sortIndicator(categorySort, "revenueDelta")}</span>
+                    </button>
+                  </th>
+                  <th className="px-4 py-3">
+                    <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setCategorySort, categorySort, "prevRevenue")}>
+                      Faturamento {compareLabelShort} <span className="text-[10px]">{sortIndicator(categorySort, "prevRevenue")}</span>
+                    </button>
+                  </th>
+                  <th className="px-4 py-3">
+                    <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setCategorySort, categorySort, "avgTicket")}>
+                      Ticket médio <span className="text-[10px]">{sortIndicator(categorySort, "avgTicket")}</span>
+                    </button>
+                  </th>
+                  <th className="px-4 py-3">
+                    <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setCategorySort, categorySort, "ticketDelta")}>
+                      Var. <span className="text-[10px]">{sortIndicator(categorySort, "ticketDelta")}</span>
+                    </button>
+                  </th>
+                  <th className="px-4 py-3">
+                    <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setCategorySort, categorySort, "prevAvgTicket")}>
+                      Ticket {compareLabelShort} <span className="text-[10px]">{sortIndicator(categorySort, "prevAvgTicket")}</span>
+                    </button>
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {categoryRowsSorted.length ? (
+                  categoryRowsSorted.map((r: any) => {
+                    const revDelta = r.revenueDelta as number | null;
+                    const ticketDelta = r.ticketDelta as number | null;
+                    return (
+                      <tr
+                        key={String(r.id)}
+                        className="bg-white hover:bg-slate-50"
+                        onClick={() => toggleSingle(setCategories, categories, String(r.id))}
+                        style={{ cursor: "pointer" }}
+                        title="Clique para filtrar por categoria"
+                      >
+                        <td className="px-4 py-3 font-semibold text-slate-900">{String(r.id)}</td>
+                        <td className="px-4 py-3 text-slate-700">{formatBRLNoSpace(Number(r.revenue || 0))}</td>
+                        <td className={["px-4 py-3 text-xs font-extrabold", deltaClass(revDelta)].join(" ")}>{formatPctSigned1(revDelta)}</td>
+                        <td className="px-4 py-3 text-slate-700">{formatBRLNoSpace(Number(r.prevRevenue || 0))}</td>
+                        <td className="px-4 py-3 text-slate-700">{formatBRLNoSpace(Number(r.avgTicket || 0))}</td>
+                        <td className={["px-4 py-3 text-xs font-extrabold", deltaClass(ticketDelta)].join(" ")}>{formatPctSigned1(ticketDelta)}</td>
+                        <td className="px-4 py-3 text-slate-700">{formatBRLNoSpace(Number(r.prevAvgTicket || 0))}</td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td className="px-4 py-3 text-slate-600" colSpan={7}>
+                      Sem dados.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      </div>
+
+      {/* 5ª linha: Produtos (tabela D-1) */}
+      <Card className="mt-4 w-full border-slate-200 bg-white p-5">
+        <div className="text-lg font-extrabold text-slate-900">Produtos (D-1)</div>
+        <div className="mt-1 text-xs text-slate-500">Comparação fixa: Hoje vs D-1</div>
+
+        <div className="mt-3 overflow-hidden rounded-xl border border-slate-200">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-slate-50 text-xs font-extrabold text-slate-700">
+              <tr>
+                <th className="px-4 py-3">
+                  <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setProductSort, productSort, "id")}>
+                    Sku <span className="text-[10px]">{sortIndicator(productSort, "id")}</span>
+                  </button>
+                </th>
+                <th className="px-4 py-3">Nome</th>
+                <th className="px-4 py-3">
+                  <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setProductSort, productSort, "revenue")}>
+                    Faturamento <span className="text-[10px]">{sortIndicator(productSort, "revenue")}</span>
+                  </button>
+                </th>
+                <th className="px-4 py-3">
+                  <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setProductSort, productSort, "prevRevenue")}>
+                    Faturamento d-1 <span className="text-[10px]">{sortIndicator(productSort, "prevRevenue")}</span>
+                  </button>
+                </th>
+                <th className="px-4 py-3">
+                  <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setProductSort, productSort, "revenueDelta")}>
+                    Variação <span className="text-[10px]">{sortIndicator(productSort, "revenueDelta")}</span>
+                  </button>
+                </th>
+                <th className="px-4 py-3">
+                  <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setProductSort, productSort, "avgTicket")}>
+                    Ticket médio <span className="text-[10px]">{sortIndicator(productSort, "avgTicket")}</span>
+                  </button>
+                </th>
+                <th className="px-4 py-3">
+                  <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setProductSort, productSort, "prevAvgTicket")}>
+                    Ticket médio d-1 <span className="text-[10px]">{sortIndicator(productSort, "prevAvgTicket")}</span>
+                  </button>
+                </th>
+                <th className="px-4 py-3">
+                  <button type="button" className="inline-flex items-center gap-1" onClick={() => toggleSort(setProductSort, productSort, "ticketDelta")}>
+                    Variação <span className="text-[10px]">{sortIndicator(productSort, "ticketDelta")}</span>
+                  </button>
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {productRowsSorted.length ? (
+                productRowsSorted.map((r: any) => {
+                  const revDelta = r.revenueDelta as number | null;
+                  const ticketDelta = r.ticketDelta as number | null;
+                  return (
+                    <tr
+                      key={String(r.sku)}
+                      className="bg-white hover:bg-slate-50"
+                      onClick={() => (r.productId ? setSelectedProductId(Number(r.productId)) : undefined)}
+                      style={{ cursor: r.productId ? "pointer" : "default" }}
+                      title={r.productId ? "Clique para ver detalhes do produto" : undefined}
+                    >
+                      <td className="px-4 py-3 font-semibold text-slate-900">{String(r.sku)}</td>
+                      <td className="px-4 py-3 text-slate-700 truncate" title={String(r.name || "")}>
+                        {truncate50(String(r.name || "-"))}
+                      </td>
+                      <td className="px-4 py-3 text-slate-700">{formatBRLNoSpace(Number(r.revenue || 0))}</td>
+                      <td className="px-4 py-3 text-slate-700">{formatBRLNoSpace(Number(r.prevRevenue || 0))}</td>
+                      <td className={["px-4 py-3 text-xs font-extrabold", deltaClass(revDelta)].join(" ")}>{formatPctSigned1(revDelta)}</td>
+                      <td className="px-4 py-3 text-slate-700">{formatBRLNoSpace(Number(r.avgTicket || 0))}</td>
+                      <td className="px-4 py-3 text-slate-700">{formatBRLNoSpace(Number(r.prevAvgTicket || 0))}</td>
+                      <td className={["px-4 py-3 text-xs font-extrabold", deltaClass(ticketDelta)].join(" ")}>{formatPctSigned1(ticketDelta)}</td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td className="px-4 py-6 text-slate-600" colSpan={8}>
+                    Sem dados.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
 
       {/* Drawer de filtros (sem data) */}
       <SlideOver open={filtersOpen} title="Filtros (Ao vivo)" onClose={() => setFiltersOpen(false)}>
