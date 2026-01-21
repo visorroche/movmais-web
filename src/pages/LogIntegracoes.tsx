@@ -68,16 +68,14 @@ export default function LogIntegracoes() {
 
     // Regra: se Periodo do Registro for preenchido, ignora Data do Processamento.
     // Se não tiver período, filtra por "processed" (um único dia).
-    const processedStart = !hasPeriodo && processamentoDate ? `${processamentoDate}T00:00:00Z` : null;
-    const processedEnd = !hasPeriodo && processamentoDate ? `${processamentoDate}T23:59:59Z` : null;
+    const processedDate = !hasPeriodo && processamentoDate ? processamentoDate : null;
 
     return toQuery({
       command: command || null,
       platform_id: platformId || null,
       "start-date": hasPeriodo ? start : null,
       "end-date": hasPeriodo ? end : null,
-      "processed-start": processedStart,
-      "processed-end": processedEnd,
+      "processed-date": processedDate,
       limit: 50,
       offset: 0,
     });
@@ -87,7 +85,11 @@ export default function LogIntegracoes() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(buildApiUrl(`/companies/me/integration-logs${query}`), { headers: { ...getAuthHeaders() }, signal });
+      const res = await fetch(buildApiUrl(`/companies/me/integration-logs${query}`), {
+        headers: { ...getAuthHeaders() },
+        signal,
+        cache: "no-store",
+      });
       if (res.status === 401) throw new Error("Não autenticado");
       if (!res.ok) throw new Error("Erro ao carregar logs");
       const json = (await res.json()) as ApiResponse;
@@ -225,9 +227,10 @@ export default function LogIntegracoes() {
                   const filterDate = (() => {
                     const raw = r.date;
                     if (!raw) return "-";
-                    // assume YYYY-MM-DD
-                    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
-                    if (!m) return raw;
+                    // Aceita "YYYY-MM-DD" e também ISO datetime (ex.: "YYYY-MM-DDT00:00:00Z")
+                    // Sempre formata como dd/mm/yyyy (sem hora) sem depender de timezone.
+                    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(raw));
+                    if (!m) return String(raw);
                     return `${m[3]}/${m[2]}/${m[1]}`;
                   })();
 

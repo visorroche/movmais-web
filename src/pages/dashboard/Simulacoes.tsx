@@ -846,11 +846,11 @@ const DashboardSimulacoes = () => {
                       >
                         {formatBRLBig(row.lostBRL)}
                       </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           </div>
         </Card>
       </div>

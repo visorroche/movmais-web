@@ -2,12 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { ResponsiveBar } from "@nivo/bar";
 import { ResponsiveLine } from "@nivo/line";
-import { ResponsivePie } from "@nivo/pie";
 import { ResponsiveTreeMap } from "@nivo/treemap";
-import { geoMercator, geoPath } from "d3-geo";
-import { scaleQuantize } from "d3-scale";
+import { line as d3Line } from "d3-shape";
 import { SlidersHorizontal } from "lucide-react";
-import brStates from "@/assets/geo/br_states.json";
 import { Card } from "@/components/ui/card";
 import { DateRangePicker, type DateRangeValue } from "@/components/ui/date-range-picker";
 import { SlideOver } from "@/components/ui/slideover";
@@ -34,6 +31,8 @@ type ItemsOverviewResponse = {
   groupId: number | null;
   start: string;
   end: string;
+  topCategories?: { category: string; revenue: string }[];
+  dailyByCategory?: { date: string; category: string; revenue: string }[];
   topFinalCategories: { final_category: string; revenue: string }[];
   dailyByFinalCategory: { date: string; final_category: string; revenue: string }[];
   categoryTotals: { category: string; revenue: string }[];
@@ -298,107 +297,14 @@ const DashboardItens = () => {
     return rows;
   }, [activeParent, overview]);
 
-  const topProducts = useMemo(() => {
-    return (overview?.topProducts || []).map((p) => ({
-      name: String(p.name ?? p.sku),
-      qty: Number(p.qty ?? 0) || 0,
-      revenue: Number(p.revenue ?? 0) || 0,
-    }));
-  }, [overview]);
-
-  const [productSort, setProductSort] = useState<{ key: "qty" | "revenue"; dir: "asc" | "desc" }>({
-    key: "revenue",
-    dir: "desc",
-  });
-
   const [treemapLevel, setTreemapLevel] = useState<"category" | "subcategory" | "final_category" | "product">("final_category");
-
-  const sortedTopProducts = useMemo(() => {
-    const list = [...topProducts];
-    const { key, dir } = productSort;
-    list.sort((a, b) => {
-      const av = a[key];
-      const bv = b[key];
-      if (av === bv) return String(a.name).localeCompare(String(b.name));
-      return dir === "asc" ? av - bv : bv - av;
-    });
-    return list;
-  }, [productSort, topProducts]);
-
-  const pieByMarketplace = useMemo(() => {
-    return (overview?.byChannel || []).map((r) => ({
-      id: String(r.channel),
-      label: String(r.channel),
-      value: Number(r.revenue ?? 0) || 0,
-    }));
-  }, [overview]);
-  const marketplaceColorById = useMemo(() => {
-    const map = new Map<string, string>();
-    for (let i = 0; i < pieByMarketplace.length; i++) {
-      map.set(String((pieByMarketplace as any)[i]?.id ?? ""), CHART_COLORS[i % CHART_COLORS.length]);
-    }
-    return map;
-  }, [pieByMarketplace]);
-
-  const brands = useMemo(() => {
-    return (overview?.byBrand || []).map((r) => ({ id: String(r.brand), value: Number(r.revenue ?? 0) || 0 }));
-  }, [overview]);
-
-  // mapa por UF (faturamento)
-  const mapWrapRef = useRef<HTMLDivElement | null>(null);
-  const [mapWidth, setMapWidth] = useState(0);
-  const mapHeight = 360;
-  const [mapHover, setMapHover] = useState<{ id: string; value: number | null; x: number; y: number } | null>(null);
-
-  useEffect(() => {
-    const el = mapWrapRef.current;
-    if (!el) return;
-    const measure = () => setMapWidth(el.clientWidth || 0);
-    measure();
-    if (typeof ResizeObserver === "undefined") {
-      window.addEventListener("resize", measure);
-      return () => window.removeEventListener("resize", measure);
-    }
-    const ro = new ResizeObserver(() => measure());
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  const geoFeatures = useMemo(() => ((brStates as any)?.features || []) as any[], []);
-  const mapProjection = useMemo(() => {
-    if (!mapWidth || !mapHeight) return null;
-    if (!Array.isArray(geoFeatures) || geoFeatures.length === 0) return null;
-    const fc = { type: "FeatureCollection", features: geoFeatures } as any;
-    const pad = 10;
-    return geoMercator().fitExtent(
-      [
-        [pad, pad],
-        [Math.max(pad + 1, mapWidth - pad), Math.max(pad + 1, mapHeight - pad)],
-      ],
-      fc,
-    );
-  }, [geoFeatures, mapWidth]);
-  const mapPath = useMemo(() => (mapProjection ? geoPath(mapProjection) : null), [mapProjection]);
-
-  const salesByUF = useMemo(() => {
-    return (overview?.byState || []).map((r) => ({ id: String(r.state), value: Number(r.revenue ?? 0) || 0 }));
-  }, [overview]);
-
-  const salesByUFMap = useMemo(() => new Map(salesByUF.map((d) => [String(d.id), d.value])), [salesByUF]);
-  const mapMax = useMemo(() => Math.max(1, ...salesByUF.map((d) => d.value)), [salesByUF]);
-  const MAP_ORANGE_TONES = useMemo(
-    () => ["#FFF3EA", "#FFE4D1", "#FFD2B0", "#FFB885", "#FF9A52", "#FF751A", "#E65F00", "#CC4F00"],
-    [],
-  );
-  const mapScale = useMemo(() => scaleQuantize<string>().domain([0, mapMax]).range(MAP_ORANGE_TONES), [mapMax, MAP_ORANGE_TONES]);
-  const mapUnknownColor = "#E2E8F0";
 
   // linha: faturamento dia a dia (por final_category - top 6)
   const daySeries = useMemo(() => {
-    const rows = overview?.dailyByFinalCategory || [];
+    const rows = (overview as any)?.dailyByCategory || [];
     const grouped = new Map<string, { x: string; y: number }[]>();
     for (const r of rows) {
-      const cat = String((r as any).final_category ?? "");
+      const cat = String((r as any).category ?? "");
       const x = String((r as any).date ?? "");
       const y = Number((r as any).revenue ?? 0) || 0;
       if (!grouped.has(cat)) grouped.set(cat, []);
@@ -412,6 +318,206 @@ const DashboardItens = () => {
     for (let i = 0; i < daySeries.length; i++) map.set(String((daySeries as any)[i]?.id ?? ""), CHART_COLORS[i % CHART_COLORS.length]);
     return map;
   }, [daySeries]);
+
+  // --- NOVA VISÃO: tabela de SKUs com variação de preço + série diária do SKU selecionado
+  type SkuPriceRow = {
+    sku: string;
+    name: string | null;
+    qty: number;
+    revenue: string;
+    minPrice: string;
+    maxPrice: string;
+    firstAvgPrice: string | null;
+    lastAvgPrice: string | null;
+    deltaPct: number | null;
+  };
+  const [skuTableLoading, setSkuTableLoading] = useState(false);
+  const [skuTableError, setSkuTableError] = useState<string | null>(null);
+  const [skuRows, setSkuRows] = useState<SkuPriceRow[]>([]);
+  const [selectedSku, setSelectedSku] = useState<string>("");
+  const [skuSort, setSkuSort] = useState<{ key: "sku" | "name" | "minPrice" | "maxPrice" | "deltaPct" | "qty"; dir: "asc" | "desc" }>({
+    key: "maxPrice",
+    dir: "desc",
+  });
+  const [skuDailyLoading, setSkuDailyLoading] = useState(false);
+  const [skuDailyError, setSkuDailyError] = useState<string | null>(null);
+  const [skuDaily, setSkuDaily] = useState<{ ymd: string; date: string; qty: number; avgPrice: string | null }[]>([]);
+  const skuChartRef = useRef<HTMLDivElement | null>(null);
+
+  const deltaTextClass = (ratio: number | null) => {
+    if (ratio === null || !Number.isFinite(ratio)) return "text-slate-400";
+    if (ratio > 0) return "text-emerald-700";
+    if (ratio < 0) return "text-rose-700";
+    return "text-slate-700";
+  };
+  const truncate50 = (value: string | null | undefined) => {
+    const s = String(value ?? "");
+    if (s.length <= 50) return s;
+    return `${s.slice(0, 47)}...`;
+  };
+
+  const sortedSkuRows = useMemo(() => {
+    const { key, dir } = skuSort;
+    const list = [...skuRows];
+    const factor = dir === "asc" ? 1 : -1;
+    const asNum = (v: any) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+    const cmpText = (a: any, b: any) => String(a ?? "").localeCompare(String(b ?? ""), "pt-BR", { sensitivity: "base" }) * factor;
+    const cmpNum = (a: any, b: any) => {
+      const av = asNum(a);
+      const bv = asNum(b);
+      if (av === null && bv === null) return 0;
+      if (av === null) return 1; // nulls por último
+      if (bv === null) return -1;
+      if (av === bv) return 0;
+      return (av < bv ? -1 : 1) * factor;
+    };
+
+    list.sort((a, b) => {
+      if (key === "sku") return cmpText(a.sku, b.sku);
+      if (key === "name") return cmpText(a.name, b.name);
+      if (key === "minPrice") return cmpNum(a.minPrice, b.minPrice);
+      if (key === "maxPrice") return cmpNum(a.maxPrice, b.maxPrice);
+      if (key === "deltaPct") return cmpNum(a.deltaPct, b.deltaPct);
+      return cmpNum(a.qty, b.qty);
+    });
+    return list;
+  }, [skuRows, skuSort]);
+
+  const selectedSkuRow = useMemo(() => {
+    const sku = String(selectedSku || "").trim();
+    if (!sku) return null;
+    return skuRows.find((r) => String(r.sku) === sku) || null;
+  }, [selectedSku, skuRows]);
+
+  const selectedSkuTitle = useMemo(() => {
+    const name = selectedSkuRow?.name ? String(selectedSkuRow.name) : "";
+    const sku = String(selectedSku || "").trim();
+    const display = name.trim() ? name.trim() : sku;
+    return `Histórico de Preço e Quantidade de Itens Vendido do produto: ${display}`;
+  }, [selectedSku, selectedSkuRow]);
+
+  const sortBtn = (key: (typeof skuSort)["key"], label: string, align: "left" | "right" = "left") => {
+    const active = skuSort.key === key;
+    const arrow = active ? (skuSort.dir === "asc" ? "▲" : "▼") : "";
+    return (
+      <button
+        type="button"
+        onClick={() =>
+          setSkuSort((cur) => ({
+            key,
+            dir: cur.key === key ? (cur.dir === "asc" ? "desc" : "asc") : "desc",
+          }))
+        }
+        className={[
+          "inline-flex items-center gap-2 hover:text-slate-900",
+          align === "right" ? "w-full justify-end" : "w-full justify-start",
+        ].join(" ")}
+        title="Clique para ordenar"
+      >
+        {label}
+        <span className="text-slate-400">{arrow}</span>
+      </button>
+    );
+  };
+
+  // carrega tabela de SKUs (variação de preço)
+  useEffect(() => {
+    const start = String(dateRange.start || "").trim();
+    const end = String(dateRange.end || "").trim();
+    if (!start || !end) return;
+    const ac = new AbortController();
+
+    const qs = new URLSearchParams();
+    qs.set("start", start);
+    qs.set("end", end);
+    for (const id of stores) qs.append("company_id", id);
+    for (const s of status) qs.append("status", s);
+    for (const ch of channels) qs.append("channel", ch);
+    for (const c of categories) qs.append("category", c);
+    for (const st of states) qs.append("state", st);
+    for (const city of cities) qs.append("city", city);
+    for (const sku of productValues) qs.append("sku", sku);
+
+    setSkuTableLoading(true);
+    setSkuTableError(null);
+    fetch(buildApiUrl(`/companies/me/dashboard/items/sku-price-table?${qs.toString()}`), { headers: { ...getAuthHeaders() }, signal: ac.signal })
+      .then(async (res) => {
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error((data as any)?.message || "Erro ao carregar tabela de SKUs");
+        }
+        return res.json() as Promise<{ rows: SkuPriceRow[] }>;
+      })
+      .then((d) => {
+        const list = Array.isArray((d as any)?.rows) ? ((d as any).rows as SkuPriceRow[]) : [];
+        setSkuRows(list);
+        if (selectedSku && !list.some((r) => String(r.sku) === selectedSku)) {
+          setSelectedSku("");
+          setSkuDaily([]);
+          setSkuDailyError(null);
+        }
+      })
+      .catch((e: any) => {
+        if (String(e?.name || "") === "AbortError") return;
+        setSkuRows([]);
+        setSkuTableError(String(e?.message || "Erro ao carregar tabela de SKUs"));
+      })
+      .finally(() => setSkuTableLoading(false));
+
+    return () => ac.abort();
+  }, [categories, channels, cities, dateRange.end, dateRange.start, productValues, selectedSku, states, status, stores]);
+
+  // carrega série diária do SKU selecionado
+  useEffect(() => {
+    const sku = String(selectedSku || "").trim();
+    if (!sku) return;
+    const start = String(dateRange.start || "").trim();
+    const end = String(dateRange.end || "").trim();
+    if (!start || !end) return;
+    const ac = new AbortController();
+
+    const qs = new URLSearchParams();
+    qs.set("start", start);
+    qs.set("end", end);
+    qs.set("sku", sku);
+    for (const id of stores) qs.append("company_id", id);
+    for (const s of status) qs.append("status", s);
+    for (const ch of channels) qs.append("channel", ch);
+    for (const c of categories) qs.append("category", c);
+    for (const st of states) qs.append("state", st);
+    for (const city of cities) qs.append("city", city);
+
+    setSkuDailyLoading(true);
+    setSkuDailyError(null);
+    fetch(buildApiUrl(`/companies/me/dashboard/items/sku-daily?${qs.toString()}`), { headers: { ...getAuthHeaders() }, signal: ac.signal })
+      .then(async (res) => {
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error((data as any)?.message || "Erro ao carregar série do SKU");
+        }
+        return res.json() as Promise<{ rows: { ymd: string; date: string; qty: number; avgPrice: string | null }[] }>;
+      })
+      .then((d) => setSkuDaily(Array.isArray((d as any)?.rows) ? (d as any).rows : []))
+      .catch((e: any) => {
+        if (String(e?.name || "") === "AbortError") return;
+        setSkuDaily([]);
+        setSkuDailyError(String(e?.message || "Erro ao carregar série do SKU"));
+      })
+      .finally(() => setSkuDailyLoading(false));
+
+    return () => ac.abort();
+  }, [categories, channels, cities, dateRange.end, dateRange.start, selectedSku, states, status, stores]);
+
+  // ao selecionar um SKU, rolar até o gráfico
+  useEffect(() => {
+    if (!selectedSku) return;
+    const el = skuChartRef.current;
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [selectedSku]);
 
   const treemapData = useMemo(() => {
     const root: any = { name: "Categorias", children: [] as any[] };
@@ -550,7 +656,7 @@ const DashboardItens = () => {
       <Card className="mt-4 w-full border-slate-200 bg-white p-5">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
-            <div className="text-lg font-extrabold text-slate-900">Categorias e subcategorias</div>
+        <div className="text-lg font-extrabold text-slate-900">Categorias e subcategorias</div>
             <div className="mt-1 text-sm text-slate-600">Hierarquia: Categoria → Sub-categoria → Categoria Final → Produto</div>
           </div>
           <div className="inline-flex overflow-hidden rounded-xl border border-slate-200 bg-white">
@@ -729,195 +835,203 @@ const DashboardItens = () => {
 
       {/* Linha 2: produtos mais vendidos + marketplaces */}
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-12">
-        <Card className="w-full border-slate-200 bg-white p-5 lg:col-span-6">
-          <div className="text-lg font-extrabold text-slate-900">Produtos mais vendidos</div>
-          <div className="mt-3 overflow-hidden rounded-xl border border-slate-200">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-slate-50">
-                <tr className="text-xs font-extrabold text-slate-600">
-                  <th className="px-4 py-3">Produto</th>
-                  <th className="px-4 py-3 text-right">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setProductSort((cur) => ({
-                          key: "qty",
-                          dir: cur.key === "qty" ? (cur.dir === "asc" ? "desc" : "asc") : "desc",
-                        }))
-                      }
-                      className="inline-flex items-center gap-2 hover:text-slate-900"
-                    >
-                      Qtd.
-                      <span className="text-slate-400">{productSort.key === "qty" ? (productSort.dir === "asc" ? "▲" : "▼") : ""}</span>
-                    </button>
-                  </th>
-                  <th className="px-4 py-3 text-right">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setProductSort((cur) => ({
-                          key: "revenue",
-                          dir: cur.key === "revenue" ? (cur.dir === "asc" ? "desc" : "asc") : "desc",
-                        }))
-                      }
-                      className="inline-flex items-center gap-2 hover:text-slate-900"
-                    >
-                      Faturamento
-                      <span className="text-slate-400">
-                        {productSort.key === "revenue" ? (productSort.dir === "asc" ? "▲" : "▼") : ""}
-                      </span>
-                    </button>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedTopProducts.map((p) => (
-                  <tr key={p.name} className="border-t border-slate-200">
-                    <td className="px-4 py-3">
-                      <div className="min-w-0">
-                        <div className="font-semibold text-slate-900 truncate text-[11px]" title={String(p.name || "")}>
-                          {String(p.name || "").length > 50 ? `${String(p.name).slice(0, 50)}...` : String(p.name)}
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-right text-slate-900 tabular-nums">{p.qty}</td>
-                    <td className="px-4 py-3 text-right text-slate-900 tabular-nums">{formatBRLNoSpace(p.revenue)}</td>
+        <Card className="w-full border-slate-200 bg-white p-5 lg:col-span-12">
+          <div className="text-lg font-extrabold text-slate-900">Variação de preço por SKU</div>
+          <div className="mt-1 text-xs text-slate-500">Clique em um SKU para ver a série diária (quantidade + preço médio).</div>
+
+          {skuTableLoading ? <div className="mt-3 text-sm text-slate-600">Carregando tabela...</div> : null}
+          {!skuTableLoading && skuTableError ? <div className="mt-3 text-sm text-red-600">{skuTableError}</div> : null}
+
+          {!skuTableLoading && !skuTableError ? (
+            <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200">
+              <table className="min-w-full text-left text-sm">
+                <thead className="bg-slate-50 text-xs font-extrabold text-slate-700">
+                  <tr>
+                    <th className="px-4 py-3">{sortBtn("sku", "SKU")}</th>
+                    <th className="px-4 py-3">{sortBtn("name", "Nome")}</th>
+                    <th className="px-4 py-3 text-right">{sortBtn("minPrice", "Menor preço", "right")}</th>
+                    <th className="px-4 py-3 text-right">{sortBtn("maxPrice", "Maior preço", "right")}</th>
+                    <th className="px-4 py-3 text-right">{sortBtn("deltaPct", "Variação", "right")}</th>
+                    <th className="px-4 py-3 text-right">{sortBtn("qty", "Qtd. itens", "right")}</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-
-        <div className="grid grid-cols-1 gap-4 lg:col-span-6">
-          <Card className="w-full border-slate-200 bg-white p-5">
-            <div className="text-lg font-extrabold text-slate-900">Faturamento por marketplace</div>
-            <div className="mt-3" style={{ height: 280 }}>
-              <ResponsivePie
-                data={pieByMarketplace as any}
-                margin={{ top: 10, right: 10, bottom: 10, left: 10 }}
-                innerRadius={0.55}
-                padAngle={0.8}
-                cornerRadius={6}
-                activeOuterRadiusOffset={8}
-                colors={(d: any) => {
-                  const id = String(d?.id ?? "");
-                  const base = marketplaceColorById.get(id) || CHART_COLORS[0];
-                  const hasActive = channels.length === 1;
-                  if (hasActive && channels[0] !== id) return hexToRgba(base, 0.2);
-                  return base;
-                }}
-                enableArcLinkLabels={false}
-                arcLabelsSkipAngle={10}
-                arcLabelsTextColor="#0f172a"
-                onClick={(d: any) => toggleSingle(setChannels, channels, String(d.id))}
-                valueFormat={(v: any) => formatBRLNoSpace(Number(v))}
-                arcLabel={(d: any) => formatBRLNoSpace(Number(d.value))}
-                tooltip={({ datum }: any) => (
-                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 shadow-xl">
-                    <div className="font-extrabold">{datum.label}</div>
-                    <div>{formatBRLNoSpace(datum.value)}</div>
-                  </div>
-                )}
-              />
-            </div>
-            {channels.length ? (
-              <div className="mt-2 text-xs text-slate-600">
-                Marketplace ativo: <span className="font-semibold text-slate-900">{channels.join(", ")}</span>
-              </div>
-            ) : null}
-          </Card>
-
-          <Card className="w-full border-slate-200 bg-white p-5">
-            <div className="text-lg font-extrabold text-slate-900">Faturamento por marca</div>
-            <div className="mt-3" style={{ height: 280 }}>
-              <ResponsiveBar
-                data={brands.map((d) => ({ marca: d.id, faturamento: d.value })) as any}
-                keys={["faturamento"]}
-                indexBy="marca"
-                margin={{ top: 10, right: 16, bottom: 70, left: 92 }}
-                padding={0.35}
-                colors="#FF751A"
-                borderRadius={6}
-                enableGridX={false}
-                enableGridY={true}
-                axisLeft={{ format: (v) => formatBRLCompact(Number(v)), legend: "" }}
-                axisBottom={{ tickRotation: -25, tickPadding: 10 }}
-                enableLabel={false}
-                tooltip={({ indexValue, value }: any) => (
-                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 shadow-xl">
-                    <div className="font-extrabold">{String(indexValue)}</div>
-                    <div>{formatBRLNoSpace(Number(value))}</div>
-                  </div>
-                )}
-                theme={{
-                  axis: { ticks: { text: { fill: "#475569" } }, legend: { text: { fill: "#334155", fontWeight: 700 } } },
-                  grid: { line: { stroke: "#E2E8F0" } },
-                  tooltip: { container: { background: "#fff", color: "#0f172a", fontSize: 12, borderRadius: 12 } },
-                }}
-              />
-            </div>
-          </Card>
-
-          <Card className="w-full border-slate-200 bg-white p-5">
-            <div className="text-lg font-extrabold text-slate-900">Vendas por estado</div>
-            <div className="mt-3 relative w-full" style={{ height: mapHeight }} ref={mapWrapRef}>
-              {geoFeatures.length > 0 && mapWidth > 0 && mapPath ? (
-                <>
-                  <svg width={mapWidth} height={mapHeight} role="img" aria-label="Mapa do Brasil por estado">
-                    {geoFeatures.map((f: any) => {
-                      const id = String(f?.id || f?.properties?.id || "");
-                      const v = salesByUFMap.get(id);
-                      const selectedOne = states.length === 1;
-                      const dim = selectedOne && states[0] !== id;
-                      const active = selectedOne && states[0] === id;
-                      const fill = v == null ? mapUnknownColor : mapScale(v);
-                      const d = mapPath(f);
-                      if (!d) return null;
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {sortedSkuRows.length ? (
+                    sortedSkuRows.map((r) => {
+                      const active = selectedSku && String(r.sku) === selectedSku;
                       return (
-                        <path
-                          key={id}
-                          d={d}
-                          fill={fill}
-                          opacity={dim ? 0.2 : 1}
-                          stroke={active ? "#0f172a" : "#CBD5E1"}
-                          strokeWidth={active ? 1.25 : 0.6}
-                          onClick={() => toggleSingle(setStates, states, id)}
-                          onMouseLeave={() => setMapHover(null)}
-                          onMouseMove={(e) => {
-                            const rect = (e.currentTarget.ownerSVGElement as SVGSVGElement | null)?.getBoundingClientRect();
-                            const x = rect ? e.clientX - rect.left : 0;
-                            const y = rect ? e.clientY - rect.top : 0;
-                            setMapHover({ id, value: v ?? null, x, y });
-                          }}
-                          style={{ cursor: "pointer" }}
-                        />
+                        <tr
+                          key={String(r.sku)}
+                          className={["cursor-pointer hover:bg-slate-50", active ? "bg-amber-50" : "bg-white"].join(" ")}
+                          onClick={() => setSelectedSku(String(r.sku))}
+                          title="Clique para ver o gráfico desse SKU"
+                        >
+                          <td className="px-4 py-3 font-semibold text-slate-900">{String(r.sku)}</td>
+                          <td className="px-4 py-3 text-slate-700" title={String(r.name ?? "")}>
+                            {truncate50(r.name || r.sku)}
+                          </td>
+                          <td className="px-4 py-3 text-right text-slate-900 tabular-nums">{formatBRLNoSpace(Number(r.minPrice || 0))}</td>
+                          <td className="px-4 py-3 text-right text-slate-900 tabular-nums">{formatBRLNoSpace(Number(r.maxPrice || 0))}</td>
+                          <td className={["px-4 py-3 text-right text-xs font-extrabold tabular-nums", deltaTextClass(r.deltaPct)].join(" ")}>
+                            {r.deltaPct === null ? "—" : `${(r.deltaPct * 100).toFixed(1).replace(".", ",")}%`}
+                          </td>
+                          <td className="px-4 py-3 text-right text-slate-900 tabular-nums">{Number(r.qty || 0)}</td>
+                        </tr>
                       );
-                    })}
-                  </svg>
-
-                  {mapHover ? (
-                    <div
-                      className="pointer-events-none absolute z-10 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 shadow-xl"
-                      style={{
-                        left: Math.min(mapWidth - 160, Math.max(8, mapHover.x + 12)),
-                        top: Math.min(mapHeight - 48, Math.max(8, mapHover.y - 12)),
-                        width: 160,
-                      }}
-                    >
-                      <div className="font-extrabold">{mapHover.id}</div>
-                      <div>{formatBRLNoSpace(mapHover.value ?? 0)}</div>
-                    </div>
-                  ) : null}
-                </>
-              ) : (
-                <div className="flex h-full items-center justify-center text-sm text-slate-500">
-                  {!geoFeatures.length ? "GeoJSON inválido (sem features)" : !mapWidth ? "Carregando largura do container..." : "Carregando mapa..."}
-                </div>
-              )}
+                    })
+                  ) : (
+                    <tr>
+                      <td className="px-4 py-6 text-slate-600" colSpan={6}>
+                        Sem dados.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
-          </Card>
-        </div>
+          ) : null}
+
+          {selectedSku ? (
+            <div className="mt-4" ref={skuChartRef}>
+              <div className="text-sm font-extrabold text-slate-900">{selectedSkuTitle}</div>
+              {skuDailyLoading ? <div className="mt-2 text-sm text-slate-600">Carregando gráfico...</div> : null}
+              {!skuDailyLoading && skuDailyError ? <div className="mt-2 text-sm text-red-600">{skuDailyError}</div> : null}
+
+              {!skuDailyLoading && !skuDailyError ? (
+                <div className="mt-3" style={{ height: 360 }}>
+                  {(() => {
+                    const series = skuDaily.map((r) => ({
+                      ymd: String(r.ymd),
+                      date: String(r.date),
+                      qty: Number(r.qty || 0) || 0,
+                      avg: r.avgPrice === null ? null : Number(r.avgPrice || 0),
+                    }));
+                    const avgVals = series.map((r) => (typeof r.avg === "number" && Number.isFinite(r.avg) ? r.avg : null)).filter((x) => x !== null) as number[];
+                    const minAvg = avgVals.length ? Math.min(...avgVals) : 0;
+                    const maxAvg = avgVals.length ? Math.max(...avgVals) : 0;
+                    const pad = maxAvg > minAvg ? (maxAvg - minAvg) * 0.1 : maxAvg * 0.1;
+                    const avgMin = Math.max(0, minAvg - pad);
+                    const avgMax = maxAvg + pad;
+
+                    const lineLayer = (props: any) => {
+                      const bars = props.bars || [];
+                      const innerWidth = props.innerWidth;
+                      const innerHeight = props.innerHeight;
+                      const xBy = new Map<string, number>();
+                      for (const b of bars) {
+                        const ymd = String(b?.data?.indexValue ?? "");
+                        xBy.set(ymd, Number(b.x) + Number(b.width) / 2);
+                      }
+                      const xCenter = (ymd: string): number | null => xBy.get(String(ymd)) ?? null;
+
+                      const scaleY = (v: number) => {
+                        if (!Number.isFinite(v)) return null;
+                        if (avgMax <= avgMin) return innerHeight;
+                        const t = (v - avgMin) / (avgMax - avgMin);
+                        return innerHeight - t * innerHeight;
+                      };
+
+                      const pts = series
+                        .map((r) => {
+                          const x = xCenter(r.ymd);
+                          const y = typeof r.avg === "number" ? scaleY(r.avg) : null;
+                          if (x == null || y == null) return null;
+                          return { x, y, v: r.avg };
+                        })
+                        .filter(Boolean) as any[];
+
+                      const gen = d3Line<any>()
+                        .x((d) => d.x)
+                        .y((d) => d.y);
+                      const dPath = pts.length ? gen(pts) : null;
+
+                      const ticks = 4;
+                      const tickVals =
+                        avgMax > avgMin
+                          ? Array.from({ length: ticks }, (_, i) => avgMin + (i * (avgMax - avgMin)) / (ticks - 1))
+                          : [avgMin];
+
+                      return (
+                        <g>
+                          {/* eixo direito (preço médio) */}
+                          <g>
+                            {tickVals.map((v, idx) => {
+                              const y = scaleY(v);
+                              if (y === null) return null;
+                              return (
+                                <g key={idx} transform={`translate(${Math.max(0, innerWidth - 2)},${y})`}>
+                                  <line x1={0} x2={4} y1={0} y2={0} stroke="#CBD5E1" />
+                                  <text x={-6} y={4} fontSize={10} fill="#475569" textAnchor="end">
+                                    {formatBRLCompact(Number(v))}
+                                  </text>
+                                </g>
+                              );
+                            })}
+                          </g>
+
+                          {/* linha do preço médio */}
+                          {dPath ? <path d={dPath} fill="none" stroke={CHART_COLORS[5]} strokeWidth={2.5} opacity={0.95} /> : null}
+                          {pts.map((p, idx) => (
+                            <circle key={idx} cx={p.x} cy={p.y} r={3.5} fill={CHART_COLORS[5]} stroke="#ffffff" strokeWidth={1.5} />
+                          ))}
+                        </g>
+                      );
+                    };
+
+                    return (
+                      <ResponsiveBar
+                        data={series as any}
+                        keys={["qty"]}
+                        indexBy="ymd"
+                        margin={{ top: 10, right: 56, bottom: 52, left: 64 }}
+                        padding={0.25}
+                        colors={CHART_COLORS[1]}
+                        borderRadius={6}
+                        axisBottom={{
+                          tickRotation: -35,
+                          tickPadding: 8,
+                          format: (v) => {
+                            const s = String(v ?? "");
+                            const found = skuDaily.find((x) => String(x.ymd) === s);
+                            return found ? String(found.date) : s;
+                          },
+                        }}
+                        axisLeft={{
+                          legend: "Qtd. itens",
+                          legendOffset: -46,
+                          legendPosition: "middle",
+                        }}
+                        enableLabel={false}
+                        layers={["grid", "axes", "bars", lineLayer, "markers", "legends"]}
+                        tooltip={({ indexValue, value }: any) => {
+                          const ymd = String(indexValue ?? "");
+                          const row = skuDaily.find((x) => String(x.ymd) === ymd);
+                          const avg = row?.avgPrice ? Number(row.avgPrice) : null;
+                          return (
+                            <div className="min-w-[220px] rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-xl">
+                              <div className="font-extrabold">{row?.date || ymd}</div>
+                              <div className="mt-1 text-slate-700">
+                                Qtd: <span className="font-extrabold text-slate-900">{Number(value || 0)}</span>
+                              </div>
+                              <div className="text-slate-700">
+                                Preço médio: <span className="font-extrabold text-slate-900">{avg === null ? "—" : formatBRLNoSpace(avg)}</span>
+                              </div>
+                            </div>
+                          );
+                        }}
+                        theme={{
+                          axis: { ticks: { text: { fill: "#475569" } }, legend: { text: { fill: "#334155", fontWeight: 700 } } },
+                          grid: { line: { stroke: "#E2E8F0" } },
+                          tooltip: { container: { background: "#fff", color: "#0f172a", fontSize: 12, borderRadius: 12 } },
+                        }}
+                      />
+                    );
+                  })()}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </Card>
       </div>
 
       {/* Drawer de filtros */}

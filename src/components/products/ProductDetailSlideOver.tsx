@@ -137,7 +137,17 @@ export function ProductDetailSlideOver({ open, productId, onClose }: Props) {
 
           <div>
             <div className="text-slate-500">Categoria</div>
-            <div className="text-slate-900">{detail.final_category || detail.category || "-"}</div>
+            <div className="text-slate-900">{detail.category || "-"}</div>
+          </div>
+
+          <div>
+            <div className="text-slate-500">Subcategoria</div>
+            <div className="text-slate-900">{detail.subcategory || "-"}</div>
+          </div>
+
+          <div>
+            <div className="text-slate-500">Categoria final</div>
+            <div className="text-slate-900">{detail.final_category || "-"}</div>
           </div>
 
           <details className="rounded-xl border border-slate-200 bg-slate-50 p-3">

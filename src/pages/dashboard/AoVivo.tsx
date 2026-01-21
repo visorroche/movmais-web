@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Card } from "@/components/ui/card";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { ResponsiveLine } from "@nivo/line";
 import { ResponsivePie } from "@nivo/pie";
 import { ResponsiveBar } from "@nivo/bar";
@@ -9,7 +9,7 @@ import { geoMercator, geoPath } from "d3-geo";
 import { scaleQuantize } from "d3-scale";
 import { SlideOver } from "@/components/ui/slideover";
 import { MultiSelect, type MultiSelectOption } from "@/components/ui/multi-select";
-import { DatePicker } from "@/components/ui/date-picker";
+import { DatePicker, formatDateBR } from "@/components/ui/date-picker";
 import { CHART_COLORS } from "@/lib/chartColors";
 import { buildApiUrl } from "@/lib/config";
 import { getAuthHeaders } from "@/lib/auth";
@@ -17,6 +17,7 @@ import { TrendingDown, TrendingUp, SlidersHorizontal } from "lucide-react";
 import brStates from "@/assets/geo/br_states.json";
 import { ProductThumb } from "@/components/products/ProductThumb";
 import { ProductDetailSlideOver } from "@/components/products/ProductDetailSlideOver";
+import { marketplaceColorOrFallback } from "@/lib/marketplaceColors";
 
 const DashboardAoVivo = () => {
   const formatBRLNoSpace = (value: number): string =>
@@ -71,15 +72,29 @@ const DashboardAoVivo = () => {
     const up = delta >= 0;
 
     return (
-      <span
-        className={[
-          "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-extrabold",
-          up ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-red-200 bg-red-50 text-red-700",
-        ].join(" ")}
-        title={`${compareLabel}: ${formatValue(previous)} | Hoje: ${formatValue(current)}`}
-      >
-        {up ? <TrendingUp className="h-3.5 w-3.5" /> : <TrendingDown className="h-3.5 w-3.5" />}
-        {formatPct1(pct)}
+      <span className="group relative inline-flex">
+        <span
+          className={[
+            "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-extrabold",
+            up ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-red-200 bg-red-50 text-red-700",
+          ].join(" ")}
+        >
+          {up ? <TrendingUp className="h-3.5 w-3.5" /> : <TrendingDown className="h-3.5 w-3.5" />}
+          {formatPct1(pct)}
+        </span>
+
+        {/* Popover ao passar o mouse */}
+        <div className="absolute left-1/2 top-0 z-30 hidden -translate-x-1/2 -translate-y-[calc(100%+10px)] group-hover:block">
+          <div className="pointer-events-auto w-[230px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 shadow-xl">
+            <div className="font-extrabold">Comparativo</div>
+            <div className="mt-0.5 text-slate-600">
+              Hoje: <span className="font-extrabold text-slate-900">{formatValue(current)}</span>
+            </div>
+            <div className="mt-0.5 text-slate-600">
+              {compareLabel}: <span className="font-extrabold text-slate-900">{formatValue(previous)}</span>
+            </div>
+          </div>
+        </div>
       </span>
     );
   };
@@ -157,9 +172,44 @@ const DashboardAoVivo = () => {
   type ComparePeriod = "Ontem" | "D-7" | "D-14" | "D-21" | "D-28";
   const [comparePeriod, setComparePeriod] = useState<ComparePeriod>("D-7");
 
+  type CategoryDrillLevel = "category" | "subcategory" | "final";
+  const [categoryLevel, setCategoryLevel] = useState<CategoryDrillLevel>("category");
+  const [drillCategory, setDrillCategory] = useState<string>("");
+  const [drillSubcategory, setDrillSubcategory] = useState<string>("");
+
   const pad2 = (n: number) => String(n).padStart(2, "0");
   const toISO = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-  const [day, setDay] = useState<string>(() => toISO(new Date()));
+  const shiftIsoDay = (ymd: string, deltaDays: number): string => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(ymd || ""))) return "";
+    const base = new Date(`${ymd}T00:00:00`);
+    return new Date(base.getTime() + deltaDays * 86400000).toISOString().slice(0, 10);
+  };
+  const [searchParams, setSearchParams] = useSearchParams();
+  const isIsoYmd = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || "").trim());
+  const urlDay = String(searchParams.get("day") || "").trim();
+  const [day, setDay] = useState<string>(() => (isIsoYmd(urlDay) ? urlDay : toISO(new Date())));
+
+  // Se navegar via URL (ex.: Dashboard -> Ver dia), aplica o day na tela.
+  useEffect(() => {
+    const next = String(searchParams.get("day") || "").trim();
+    if (!isIsoYmd(next)) return;
+    setDay((cur) => (cur === next ? cur : next));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  // Mantém URL sincronizada (útil para compartilhar e para outros fluxos).
+  useEffect(() => {
+    if (!isIsoYmd(day)) return;
+    setSearchParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        p.set("day", day);
+        return p;
+      },
+      { replace: true },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [day]);
 
   const isLive = Boolean(live?.isLive);
   const projectedTodayTotal = live?.projection?.projectedTodayTotal ?? 0;
@@ -338,6 +388,9 @@ const DashboardAoVivo = () => {
     for (const st of states) qs.append("state", st);
     for (const city of cities) qs.append("city", city);
     if (day) qs.set("day", day);
+    qs.set("category_level", categoryLevel);
+    if (drillCategory) qs.set("drill_category", drillCategory);
+    if (drillSubcategory) qs.set("drill_subcategory", drillSubcategory);
 
     fetch(buildApiUrl(`/companies/me/dashboard/live/overview?${qs.toString()}`), {
       headers: { ...getAuthHeaders() },
@@ -359,7 +412,7 @@ const DashboardAoVivo = () => {
       .finally(() => setLiveLoading(false));
 
     return () => ac.abort();
-  }, [filters, stores, channels, categories, states, cities, day]);
+  }, [filters, stores, channels, categories, states, cities, day, categoryLevel, drillCategory, drillSubcategory]);
 
   const apiHour = live?.currentHour;
   const currentHourLabel = String(Number.isInteger(apiHour) ? apiHour : currentHour).padStart(2, "0");
@@ -389,6 +442,18 @@ const DashboardAoVivo = () => {
     const d21 = today ? ymd(new Date(y.getTime() - 21 * 86400000)) : "";
     const d28 = today ? ymd(new Date(y.getTime() - 28 * 86400000)) : "";
     const hNow = Number.isInteger(apiHour) ? (apiHour as number) : currentHour;
+
+    const sumHourlyUntil = (rows: HourlyRow[], ymd: string, hourInclusive: number): number => {
+      const limit = Math.max(0, Math.min(23, Number(hourInclusive ?? 23)));
+      let sum = 0;
+      for (const r of rows) {
+        if (r.day !== ymd) continue;
+        const h = Number(r.hour);
+        if (!Number.isFinite(h) || h < 0 || h > limit) continue;
+        sum += Number(r.revenue) || 0;
+      }
+      return sum;
+    };
 
     const todayFull = today
       ? buildHourly(rows, today)
@@ -424,11 +489,12 @@ const DashboardAoVivo = () => {
     const compareSeriesId =
       comparePeriod === "Ontem" ? "D-1" : comparePeriod === "D-7" ? d7Label : comparePeriod === "D-14" ? d14Label : comparePeriod === "D-21" ? d21Label : d28Label;
     const compareSeriesData = compareDay ? buildHourly(rows, compareDay) : todayFull.map((p) => ({ ...p, y: 0 }));
+    const compareSeriesDataCapped = isLive ? compareSeriesData.map((p, idx) => ({ x: p.x, y: idx <= hNow ? p.y : null })) : compareSeriesData;
 
     return [
       { id: "Hoje", data: todayActual },
       ...(isLive ? [{ id: "Hoje (projeção)", data: todayProjection }] : []),
-      { id: compareSeriesId, data: compareSeriesData },
+      { id: compareSeriesId, data: compareSeriesDataCapped },
     ];
   }, [live, apiHour, currentHour, d7Label, d14Label, d21Label, d28Label, projectedTodayTotalF, todaySoFarF, comparePeriod, isLive]);
 
@@ -522,20 +588,57 @@ const DashboardAoVivo = () => {
   };
 
   const growthRows = useMemo(() => {
-    const y = Number(live?.kpis?.yesterday?.revenueSoFar ?? 0) || 0;
-    const d7 = Number(live?.kpis?.d7?.revenueSoFar ?? 0) || 0;
-    const d14 = Number(live?.kpis?.d14?.revenueSoFar ?? 0) || 0;
-    const d21 = Number(live?.kpis?.d21?.revenueSoFar ?? 0) || 0;
-    const d28 = Number(live?.kpis?.d28?.revenueSoFar ?? 0) || 0;
+    const base = String(live?.today || day || "");
+    const hNow = Number.isInteger(apiHour) ? (apiHour as number) : currentHour;
+    const rows = live?.hourly || [];
+
+    const sumHourlyUntil = (ymd: string, hourInclusive: number): number => {
+      if (!ymd) return 0;
+      const limit = Math.max(0, Math.min(23, Number(hourInclusive ?? 23)));
+      let sum = 0;
+      for (const r of rows) {
+        if (r.day !== ymd) continue;
+        const h = Number(r.hour);
+        if (!Number.isFinite(h) || h < 0 || h > limit) continue;
+        sum += Number(r.revenue) || 0;
+      }
+      return sum;
+    };
+
+    const revFor = (key: "yesterday" | "d7" | "d14" | "d21" | "d28", shiftDays: number): { day: string; revenue: number } => {
+      const compareDay = base ? shiftIsoDay(base, shiftDays) : "";
+      // Quando for HOJE (AO VIVO), o comparativo precisa ser até a hora atual.
+      const capped = isLive ? sumHourlyUntil(compareDay, hNow) : Number((live?.kpis as any)?.[key]?.revenueSoFar ?? 0) || 0;
+      return { day: compareDay, revenue: capped };
+    };
+
+    const y = revFor("yesterday", -1);
+    const d7 = revFor("d7", -7);
+    const d14 = revFor("d14", -14);
+    const d21 = revFor("d21", -21);
+    const d28 = revFor("d28", -28);
     return [
-      { label: "D-1", period: "Ontem" as ComparePeriod, value: calcGrowth(y) },
-      { label: "D-7", period: "D-7" as ComparePeriod, value: calcGrowth(d7) },
-      { label: "D-14", period: "D-14" as ComparePeriod, value: calcGrowth(d14) },
-      { label: "D-21", period: "D-21" as ComparePeriod, value: calcGrowth(d21) },
-      { label: "D-28", period: "D-28" as ComparePeriod, value: calcGrowth(d28) },
+      { label: "D-1", period: "Ontem" as ComparePeriod, value: calcGrowth(y.revenue), compareRevenue: y.revenue, compareDay: y.day },
+      { label: "D-7", period: "D-7" as ComparePeriod, value: calcGrowth(d7.revenue), compareRevenue: d7.revenue, compareDay: d7.day },
+      { label: "D-14", period: "D-14" as ComparePeriod, value: calcGrowth(d14.revenue), compareRevenue: d14.revenue, compareDay: d14.day },
+      { label: "D-21", period: "D-21" as ComparePeriod, value: calcGrowth(d21.revenue), compareRevenue: d21.revenue, compareDay: d21.day },
+      { label: "D-28", period: "D-28" as ComparePeriod, value: calcGrowth(d28.revenue), compareRevenue: d28.revenue, compareDay: d28.day },
     ];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [live?.kpis?.today?.revenueSoFar, live?.kpis?.yesterday?.revenueSoFar, live?.kpis?.d7?.revenueSoFar, live?.kpis?.d14?.revenueSoFar, live?.kpis?.d21?.revenueSoFar, live?.kpis?.d28?.revenueSoFar]);
+  }, [
+    live?.today,
+    day,
+    live?.kpis?.today?.revenueSoFar,
+    live?.kpis?.yesterday?.revenueSoFar,
+    live?.kpis?.d7?.revenueSoFar,
+    live?.kpis?.d14?.revenueSoFar,
+    live?.kpis?.d21?.revenueSoFar,
+    live?.kpis?.d28?.revenueSoFar,
+    live?.hourly,
+    apiHour,
+    currentHour,
+    isLive,
+  ]);
 
   const pieByCategory = useMemo(() => (live?.byCategory || []).map((d) => ({ id: d.id, label: d.id, value: d.value })), [live]);
 
@@ -661,7 +764,7 @@ const DashboardAoVivo = () => {
         avgTicket,
         prevAvgTicket,
         ticketDelta: pctChange(avgTicket, prevAvgTicket),
-      };
+    };
     });
   };
 
@@ -794,7 +897,8 @@ const DashboardAoVivo = () => {
   const marketplaceColorById = useMemo(() => {
     const map = new Map<string, string>();
     for (let i = 0; i < pieByMarketplace.length; i++) {
-      map.set(String((pieByMarketplace as any)[i]?.id ?? ""), CHART_COLORS[i % CHART_COLORS.length]);
+      const id = String((pieByMarketplace as any)[i]?.id ?? "");
+      map.set(id, marketplaceColorOrFallback(id));
     }
     return map;
   }, [pieByMarketplace]);
@@ -803,6 +907,55 @@ const DashboardAoVivo = () => {
     if (current.length === 1 && current[0] === next) setter([]);
     else setter([next]);
   };
+
+  const resetCategoryDrill = () => {
+    setCategoryLevel("category");
+    setDrillCategory("");
+    setDrillSubcategory("");
+  };
+  const drillDownCategory = (id: string) => {
+    const next = String(id ?? "").trim();
+    if (!next) return;
+    if (categoryLevel === "category") {
+      setCategoryLevel("subcategory");
+      setDrillCategory(next);
+      setDrillSubcategory("");
+      return;
+    }
+    if (categoryLevel === "subcategory") {
+      setCategoryLevel("final");
+      setDrillSubcategory(next);
+      return;
+    }
+  };
+  const CategoryBreadcrumb = () => (
+    <div className="mt-1 text-xs text-slate-500">
+      <button type="button" className="font-semibold text-slate-700 hover:underline" onClick={resetCategoryDrill}>
+        Todas as Categorias
+      </button>
+      {categoryLevel !== "category" && drillCategory ? (
+        <>
+          <span className="mx-1 text-slate-400">&gt;</span>
+          <button
+            type="button"
+            className="font-semibold text-slate-700 hover:underline"
+            onClick={() => {
+              setCategoryLevel("subcategory");
+              setDrillSubcategory("");
+            }}
+          >
+            {drillCategory}
+          </button>
+        </>
+      ) : null}
+      {categoryLevel === "final" && drillSubcategory ? (
+        <>
+          <span className="mx-1 text-slate-400">&gt;</span>
+          <span className="font-semibold text-slate-700">{drillSubcategory}</span>
+        </>
+      ) : null}
+    </div>
+  );
 
   const salesByUF = useMemo(() => (live?.byState || []).map((d) => ({ id: d.id, value: d.value })), [live]);
 
@@ -857,7 +1010,7 @@ const DashboardAoVivo = () => {
         </button>
       </div>
       </div>
-      <h1 className="text-2xl font-extrabold text-slate-900">{isLive ? "Vendas ao vivo (Hoje)" : `Vendas (${day})`}</h1>
+      <h1 className="text-2xl font-extrabold text-slate-900">{isLive ? "Vendas ao vivo (Hoje)" : `Vendas (${formatDateBR(day)})`}</h1>
       {liveLoading ? <div className="mt-2 text-sm text-slate-600">Carregando dados ao vivo...</div> : null}
       {!liveLoading && liveError ? <div className="mt-2 text-sm text-red-600">{liveError}</div> : null}
 
@@ -889,20 +1042,49 @@ const DashboardAoVivo = () => {
             <div className="text-xs font-semibold text-slate-500">Crescimento (faturamento até agora)</div>
             <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-5">
               {growthRows.map((g) => (
-                <button
-                  key={g.label}
-                  type="button"
-                  onClick={() => setComparePeriod(g.period)}
-                  className={[
-                    "rounded-xl border px-3 py-2 text-left transition-colors hover:brightness-[0.98]",
-                    growthBadgeClass(g.value),
-                    comparePeriod === g.period ? "ring-2 ring-slate-900/15" : "",
-                  ].join(" ")}
-                  title={`Clique para comparar o gráfico com ${g.label}`}
-                >
-                  <div className="text-[11px] font-extrabold">{g.label}</div>
-                  <div className="mt-1 text-sm font-extrabold">{formatPct(g.value)}</div>
-                </button>
+                <div key={g.label} className="group relative">
+                  <button
+                    type="button"
+                    onClick={() => setComparePeriod(g.period)}
+                    className={[
+                      "w-full rounded-xl border px-3 py-2 text-left transition-colors hover:brightness-[0.98]",
+                      growthBadgeClass(g.value),
+                      comparePeriod === g.period ? "ring-2 ring-slate-900/15" : "",
+                    ].join(" ")}
+                    title={`Clique para comparar o gráfico com ${g.label}`}
+                  >
+                    <div className="text-[11px] font-extrabold">{g.label}</div>
+                    <div className="mt-1 text-sm font-extrabold">{formatPct(g.value)}</div>
+                  </button>
+
+                  {/* Popover ao passar o mouse */}
+                  <div className="absolute left-1/2 top-0 z-30 hidden -translate-x-1/2 -translate-y-[calc(100%+10px)] group-hover:block">
+                    <div className="pointer-events-auto w-[230px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 shadow-xl">
+                      <div className="font-extrabold">{g.label}</div>
+                      <div className="mt-0.5 text-slate-600">
+                        Data: <span className="font-semibold text-slate-900">{g.compareDay ? formatDateBR(g.compareDay) : "—"}</span>
+              </div>
+                      <div className="mt-1 text-slate-600">
+                        Faturamento: <span className="font-extrabold text-slate-900">{formatBRLNoSpace(Number(g.compareRevenue || 0))}</span>
+            </div>
+                      <div className="mt-2">
+                        <button
+                          type="button"
+                          className="inline-flex items-center rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-extrabold text-slate-800 hover:bg-slate-50"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            if (!g.compareDay) return;
+                            setDay(g.compareDay);
+                          }}
+                          title="Abrir esse dia em detalhes"
+                        >
+                          Ver dia
+                        </button>
+              </div>
+            </div>
+              </div>
+                </div>
               ))}
             </div>
           </div>
@@ -1157,11 +1339,11 @@ const DashboardAoVivo = () => {
               </div>
 
               <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                <div className="text-xs font-semibold text-slate-500">SKUs</div>
+                <div className="text-xs font-semibold text-slate-500">Quantidade de itens</div>
                 <div className="mt-1 flex items-center justify-between gap-2">
-                  <div className="text-lg font-extrabold text-slate-900">{kpis.skusCount}</div>
+                  <div className="text-lg font-extrabold text-slate-900">{kpis.itemsSold}</div>
                   <span className="shrink-0">
-                    <DeltaBadge current={kpis.skusCount} previous={kpisPrev.skusCount} compareLabel={comparePeriod} formatValue={(n) => formatInt(Number(n))} />
+                    <DeltaBadge current={kpis.itemsSold} previous={kpisPrev.itemsSold} compareLabel={comparePeriod} formatValue={(n) => formatInt(Number(n))} />
                   </span>
                 </div>
               </div>
@@ -1453,14 +1635,15 @@ const DashboardAoVivo = () => {
                 )}
               </tbody>
             </table>
-          </div>
-        </Card>
+        </div>
+      </Card>
       </div>
 
       {/* 4ª linha: Categoria (gráfico + tabela) */}
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-12">
         <Card className="w-full border-slate-200 bg-white p-5 lg:col-span-4">
           <div className="text-lg font-extrabold text-slate-900">Faturamento por categoria</div>
+          <CategoryBreadcrumb />
           <div className="mt-3" style={{ height: 320 }}>
             {pieByCategory.length ? (
               <ResponsiveBar
@@ -1500,7 +1683,7 @@ const DashboardAoVivo = () => {
                   grid: { line: { stroke: "#E2E8F0" } },
                   tooltip: { container: { background: "#fff", color: "#0f172a", fontSize: 12, borderRadius: 12 } },
                 }}
-                onClick={(bar: any) => toggleSingle(setCategories, categories, String(bar?.indexValue ?? ""))}
+                onClick={(bar: any) => drillDownCategory(String(bar?.indexValue ?? ""))}
               />
             ) : (
               <div className="flex h-full items-center justify-center text-sm text-slate-500">Sem dados.</div>
@@ -1515,6 +1698,7 @@ const DashboardAoVivo = () => {
 
         <Card className="w-full border-slate-200 bg-white p-5 lg:col-span-8">
           <div className="text-lg font-extrabold text-slate-900">Categorias</div>
+          <CategoryBreadcrumb />
           <div className="mt-1 text-xs text-slate-500">
             Comparando com: <span className="font-semibold text-slate-700">{compareLabelForPeriod(comparePeriod)}</span>
           </div>
@@ -1568,9 +1752,9 @@ const DashboardAoVivo = () => {
                       <tr
                         key={String(r.id)}
                         className="bg-white hover:bg-slate-50"
-                        onClick={() => toggleSingle(setCategories, categories, String(r.id))}
+                        onClick={() => drillDownCategory(String(r.id))}
                         style={{ cursor: "pointer" }}
-                        title="Clique para filtrar por categoria"
+                        title="Clique para ver o próximo nível"
                       >
                         <td className="px-4 py-3 font-semibold text-slate-900">{String(r.id)}</td>
                         <td className="px-4 py-3 text-slate-700">{formatBRLNoSpace(Number(r.revenue || 0))}</td>

@@ -28,7 +28,7 @@ function fromISODate(value: string): Date | null {
   return dt;
 }
 
-function formatDateBR(value: string): string {
+export function formatDateBR(value: string): string {
   const dt = fromISODate(value);
   if (!dt) return value || "-";
   return `${pad2(dt.getDate())}/${pad2(dt.getMonth() + 1)}/${dt.getFullYear()}`;

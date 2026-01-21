@@ -6,6 +6,7 @@ import { getAuthHeaders } from "@/lib/auth";
 import { Search } from "lucide-react";
 import { SlideOver } from "@/components/ui/slideover";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { formatTaxIdBR } from "@/lib/formatTaxId";
 
 const Clientes = () => {
   type CustomerRow = {
@@ -14,7 +15,8 @@ const Clientes = () => {
     legal_name: string | null;
     trade_name: string | null;
     email: string | null;
-    status: string | null;
+    city?: string | null;
+    state?: string | null;
     external_id: string | null;
   };
 
@@ -63,10 +65,24 @@ const Clientes = () => {
 
   const formatBRL = (value: string | number | null): string => {
     if (value === null || value === undefined || value === "") return "-";
-    const n =
-      typeof value === "number"
-        ? value
-        : Number(String(value).replace(/\./g, "").replace(",", "."));
+    const parseMoney = (v: string): number => {
+      let s = String(v || "").trim();
+      s = s.replace(/[^\d,.\-]/g, "");
+      const hasDot = s.includes(".");
+      const hasComma = s.includes(",");
+      if (hasDot && hasComma) {
+        if (s.lastIndexOf(",") > s.lastIndexOf(".")) {
+          s = s.replace(/\./g, "").replace(",", ".");
+        } else {
+          s = s.replace(/,/g, "");
+        }
+      } else if (hasComma) {
+        s = s.replace(/\./g, "").replace(",", ".");
+      }
+      const n = Number(s);
+      return Number.isFinite(n) ? n : NaN;
+    };
+    const n = typeof value === "number" ? value : parseMoney(String(value));
     if (!Number.isFinite(n)) return String(value);
     return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" })
       .format(n)
@@ -232,14 +248,16 @@ const Clientes = () => {
                 <tr className="text-left text-slate-600">
                   <th className="py-2 pr-4">Nome</th>
                   <th className="py-2 pr-4">Documento</th>
+                  <th className="py-2 pr-4">Cidade</th>
+                  <th className="py-2 pr-4">Estado</th>
                   <th className="py-2 pr-4">Email</th>
-                  <th className="py-2 pr-0">Status</th>
+                  <th className="py-2 pr-0">External ID</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.length === 0 ? (
                   <tr>
-                    <td colSpan={4} className="py-6 text-slate-600">
+                    <td colSpan={6} className="py-6 text-slate-600">
                       Nenhum cliente encontrado.
                     </td>
                   </tr>
@@ -253,9 +271,11 @@ const Clientes = () => {
                         onClick={() => setSelectedId(r.id)}
                       >
                         <td className="py-3 pr-4 font-semibold text-slate-900">{name}</td>
-                        <td className="py-3 pr-4 text-slate-700">{r.tax_id}</td>
+                        <td className="py-3 pr-4 text-slate-700">{formatTaxIdBR(r.tax_id)}</td>
+                        <td className="py-3 pr-4 text-slate-700">{r.city || "-"}</td>
+                        <td className="py-3 pr-4 text-slate-700">{r.state || "-"}</td>
                         <td className="py-3 pr-4 text-slate-700">{r.email || "-"}</td>
-                        <td className="py-3 pr-0 text-slate-700">{r.status || "-"}</td>
+                        <td className="py-3 pr-0 text-slate-700">{r.external_id || "-"}</td>
                       </tr>
                     );
                   })
@@ -316,7 +336,7 @@ const Clientes = () => {
             </div>
             <div>
               <div className="text-slate-500">CPF/CNPJ</div>
-              <div className="text-slate-900">{detail.tax_id}</div>
+              <div className="text-slate-900">{formatTaxIdBR(detail.tax_id)}</div>
             </div>
             <div>
               <div className="text-slate-500">Email</div>
