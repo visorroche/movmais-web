@@ -10,6 +10,9 @@ type Props = {
   onChange: (next: DateRangeValue) => void;
   placeholder?: string;
   disabled?: boolean;
+  min?: string; // YYYY-MM-DD (inclusive)
+  max?: string; // YYYY-MM-DD (inclusive)
+  maxRangeDays?: number; // inclusive (ex.: 31)
 };
 
 function pad2(n: number) {
@@ -100,7 +103,7 @@ function formatMonthYearPT(d: Date): string {
   return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
 }
 
-export function DateRangePicker({ label, value, onChange, placeholder = "Selecionar período...", disabled }: Props) {
+export function DateRangePicker({ label, value, onChange, placeholder = "Selecionar período...", disabled, min, max, maxRangeDays }: Props) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<DateRangeValue>(value);
   const [month, setMonth] = useState<Date>(() => startOfMonthDate(new Date()));
@@ -179,11 +182,49 @@ export function DateRangePicker({ label, value, onChange, placeholder = "Selecio
     return `Até ${formatDateBR(value.end)}`;
   }, [placeholder, value.end, value.start]);
 
+  const minDt = useMemo(() => fromISODate(min || ""), [min]);
+  const maxDt = useMemo(() => fromISODate(max || ""), [max]);
+  const maxRange = useMemo(() => (maxRangeDays && maxRangeDays > 0 ? maxRangeDays : null), [maxRangeDays]);
+
+  const clampRange = (start: Date, end: Date): { start: Date; end: Date } => {
+    const dayMs = 24 * 60 * 60 * 1000;
+    let s = start;
+    let e = end;
+    if (minDt && s.getTime() < minDt.getTime()) s = minDt;
+    if (minDt && e.getTime() < minDt.getTime()) e = minDt;
+    if (maxDt && s.getTime() > maxDt.getTime()) s = maxDt;
+    if (maxDt && e.getTime() > maxDt.getTime()) e = maxDt;
+
+    if (s.getTime() > e.getTime()) {
+      const tmp = s;
+      s = e;
+      e = tmp;
+    }
+
+    if (maxRange) {
+      const days = Math.floor((e.getTime() - s.getTime()) / dayMs) + 1;
+      if (days > maxRange) {
+        // Mantém o fim (prioriza "não futuro") e move o início para caber no range máximo.
+        s = addDays(e, -(maxRange - 1));
+        if (minDt && s.getTime() < minDt.getTime()) s = minDt;
+      }
+    }
+    return { start: s, end: e };
+  };
+
   const apply = () => {
     const a = fromISODate(draft.start);
     const b = fromISODate(draft.end);
-    if (a && b && a.getTime() > b.getTime()) {
-      onChange({ start: draft.end, end: draft.start });
+    if (a && b) {
+      const clamped = clampRange(a, b);
+      onChange({ start: toISODate(clamped.start), end: toISODate(clamped.end) });
+    } else if (a && !b) {
+      // single day (start only) => clamp start to max/min
+      const d = clampRange(a, a).start;
+      onChange({ start: toISODate(d), end: "" });
+    } else if (!a && b) {
+      const d = clampRange(b, b).end;
+      onChange({ start: "", end: toISODate(d) });
     } else {
       onChange(draft);
     }
@@ -199,6 +240,8 @@ export function DateRangePicker({ label, value, onChange, placeholder = "Selecio
 
   const onPickDay = (day: Date) => {
     const iso = toISODate(day);
+    if (minDt && day.getTime() < minDt.getTime()) return;
+    if (maxDt && day.getTime() > maxDt.getTime()) return;
     const a = fromISODate(draft.start);
     const b = fromISODate(draft.end);
     if (!a || (a && b)) {
@@ -211,7 +254,16 @@ export function DateRangePicker({ label, value, onChange, placeholder = "Selecio
       if (end && end.getTime() < a.getTime()) {
         setDraft({ start: iso, end: toISODate(a) });
       } else {
-        setDraft({ start: draft.start, end: iso });
+        // aplica limite de range, se configurado
+        if (end && maxRange) {
+          const maxEnd = addDays(a, maxRange - 1);
+          const bounded = end.getTime() > maxEnd.getTime() ? maxEnd : end;
+          // respeita max
+          const bounded2 = maxDt && bounded.getTime() > maxDt.getTime() ? maxDt : bounded;
+          setDraft({ start: draft.start, end: toISODate(bounded2) });
+        } else {
+          setDraft({ start: draft.start, end: iso });
+        }
       }
     }
   };
@@ -233,7 +285,7 @@ export function DateRangePicker({ label, value, onChange, placeholder = "Selecio
     const thisYearStart = toISODate(startOfYear(now));
     const thisYearEnd = toISODate(endOfYear(now));
 
-    return [
+    const all = [
       { key: "today", label: "Hoje", value: { start: today, end: today } },
       { key: "yesterday", label: "Ontem", value: { start: yesterday, end: yesterday } },
       { key: "this_week", label: "Esta semana", value: { start: thisWeekStart, end: thisWeekEnd } },
@@ -246,7 +298,24 @@ export function DateRangePicker({ label, value, onChange, placeholder = "Selecio
       { key: "this_year", label: "Este ano", value: { start: thisYearStart, end: thisYearEnd } },
       { key: "all", label: "Todo o período", value: { start: "", end: "" } },
     ] as const;
-  }, []);
+
+    const maxStr = max && /^\d{4}-\d{2}-\d{2}$/.test(max) ? max : null;
+    const maxDt2 = maxStr ? fromISODate(maxStr) : null;
+    const maxRange = maxRangeDays && maxRangeDays > 0 ? maxRangeDays : null;
+    const dayMs = 24 * 60 * 60 * 1000;
+
+    return all.filter((p) => {
+      const a = fromISODate(p.value.start);
+      const b = fromISODate(p.value.end);
+      if (!a || !b) return true;
+      if (maxDt2 && (a.getTime() > maxDt2.getTime() || b.getTime() > maxDt2.getTime())) return false;
+      if (maxRange) {
+        const days = Math.floor((b.getTime() - a.getTime()) / dayMs) + 1;
+        if (days > maxRange) return false;
+      }
+      return true;
+    });
+  }, [max, maxRangeDays]);
 
   return (
     <div ref={rootRef} className="relative">
@@ -341,22 +410,36 @@ export function DateRangePicker({ label, value, onChange, placeholder = "Selecio
                           const isStart = start ? isSameDay(day, start) : false;
                           const isEnd = end ? isSameDay(day, end) : false;
                           const inRange = start && end ? isBetweenInclusive(day, start, end) : false;
+                          const isBeforeMin = minDt ? day.getTime() < minDt.getTime() : false;
+                          const isAfterMax = maxDt ? day.getTime() > maxDt.getTime() : false;
+                          const isBlocked = isBeforeMin || isAfterMax;
 
                           const base =
                             "mx-auto flex h-9 w-9 items-center justify-center rounded-full transition-colors ";
                           const text = inMonth ? "text-slate-900" : "text-slate-400";
                           const rangeBg = inRange ? "bg-primary/10 " : "";
                           const selected = isStart || isEnd ? "bg-primary text-white " : "";
-                          const hover = "hover:bg-slate-100";
+                          const hover = isBlocked ? "cursor-not-allowed" : "hover:bg-slate-100";
 
                           return (
                             <button
                               key={day.toISOString()}
                               type="button"
+                              disabled={disabled || isBlocked}
                               onClick={() => onPickDay(day)}
                               className={"py-1.5 " + (inRange ? "bg-primary/5" : "")}
                             >
-                              <span className={base + text + " " + rangeBg + selected + hover}>{day.getDate()}</span>
+                              <span
+                                className={
+                                  base +
+                                  (isBlocked ? "text-slate-300 " : text + " ") +
+                                  rangeBg +
+                                  selected +
+                                  hover
+                                }
+                              >
+                                {day.getDate()}
+                              </span>
                             </button>
                           );
                         })}
@@ -372,6 +455,8 @@ export function DateRangePicker({ label, value, onChange, placeholder = "Selecio
                     type="date"
                     value={draft.start}
                     onChange={(e) => setDraft((s) => ({ ...s, start: e.target.value }))}
+                    min={min || undefined}
+                    max={max || undefined}
                     className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-primary/30"
                   />
                   <span className="text-slate-400">–</span>
@@ -379,6 +464,8 @@ export function DateRangePicker({ label, value, onChange, placeholder = "Selecio
                     type="date"
                     value={draft.end}
                     onChange={(e) => setDraft((s) => ({ ...s, end: e.target.value }))}
+                    min={min || undefined}
+                    max={max || undefined}
                     className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-primary/30"
                   />
                 </div>

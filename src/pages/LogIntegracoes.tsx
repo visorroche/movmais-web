@@ -11,6 +11,7 @@ type ApiLogRow = {
   id: number;
   processed_at: string;
   date: string | null;
+  status?: "PROCESSANDO" | "FINALIZADO" | "ERRO" | null;
   company_id: number;
   company_name: string;
   platform_id: number | null;
@@ -24,6 +25,13 @@ type ApiLogRow = {
 type ApiResponse = { total: number; items: ApiLogRow[] };
 
 type Platform = { id: number; slug: string; name: string; type: string };
+type CompanyPlatform = {
+  id: number;
+  company_id: number | null;
+  platform_id: number | null;
+  config: any;
+  platform: Platform | null;
+};
 
 function toQuery(params: Record<string, string | number | null | undefined>): string {
   const qs = new URLSearchParams();
@@ -41,6 +49,24 @@ function todayYmd(): string {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
 
+function ymdToDateLocal(value: string): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const [y, m, d] = value.split("-").map(Number);
+  if (!y || !m || !d) return null;
+  const dt = new Date(y, m - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() !== m - 1 || dt.getDate() !== d) return null;
+  return dt;
+}
+
+function diffDaysInclusive(start: string, end: string): number | null {
+  const a = ymdToDateLocal(start);
+  const b = ymdToDateLocal(end);
+  if (!a || !b) return null;
+  const dayMs = 24 * 60 * 60 * 1000;
+  const diff = Math.floor((b.getTime() - a.getTime()) / dayMs) + 1;
+  return Number.isFinite(diff) ? diff : null;
+}
+
 export default function LogIntegracoes() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -55,6 +81,15 @@ export default function LogIntegracoes() {
 
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailRow, setDetailRow] = useState<ApiLogRow | null>(null);
+
+  const [runOpen, setRunOpen] = useState(false);
+  const [runPlatform, setRunPlatform] = useState<"tray" | "precode" | "allpost">("tray");
+  const [runScript, setRunScript] = useState<string>("orders");
+  const [runStartDate, setRunStartDate] = useState<string>(() => todayYmd());
+  const [runEndDate, setRunEndDate] = useState<string>(() => todayYmd());
+  const [runOnlyInsert, setRunOnlyInsert] = useState(true);
+  const [runSubmitting, setRunSubmitting] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
 
   const openDetail = (row: ApiLogRow) => {
     setDetailRow(row);
@@ -81,6 +116,8 @@ export default function LogIntegracoes() {
     });
   }, [command, platformId, periodoRegistro.end, periodoRegistro.start, processamentoDate]);
 
+  const maxSelectableYmd = useMemo(() => todayYmd(), []);
+
   const load = async (signal?: AbortSignal) => {
     setLoading(true);
     setError(null);
@@ -105,18 +142,116 @@ export default function LogIntegracoes() {
   useEffect(() => {
     const ac = new AbortController();
     load(ac.signal);
-    // carrega plataformas para o select (mesmo endpoint usado nas configurações)
-    fetch(buildApiUrl("/platforms"), { headers: { ...getAuthHeaders() }, signal: ac.signal })
+    // carrega plataformas configuradas na company ativa
+    fetch(buildApiUrl("/companies/me/platforms"), { headers: { ...getAuthHeaders() }, signal: ac.signal })
       .then(async (res) => {
         if (!res.ok) return [];
         const json = (await res.json()) as unknown;
-        return Array.isArray(json) ? (json as Platform[]) : [];
+        const rows = Array.isArray(json) ? (json as CompanyPlatform[]) : [];
+        const list = rows.map((r) => r?.platform).filter(Boolean) as Platform[];
+        // unique por slug
+        const seen = new Set<string>();
+        return list.filter((p) => {
+          const k = String(p.slug || "").trim();
+          if (!k || seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        });
       })
       .then((list) => setPlatforms(Array.isArray(list) ? list : []))
       .catch(() => setPlatforms([]));
     return () => ac.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    // Ajusta defaults conforme plataformas configuradas e mapeamento de scripts
+    if (platforms.length > 0) {
+      const allowed = new Set(platforms.map((p) => p.slug));
+      if (!allowed.has(runPlatform)) {
+        const first = platforms[0]?.slug as any;
+        if (first) setRunPlatform(first);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [platforms]);
+
+  const selectedPlatformSlug = useMemo(() => {
+    const pid = Number(platformId);
+    if (!pid) return null;
+    const p = platforms.find((x) => x.id === pid) ?? null;
+    return p?.slug ?? null;
+  }, [platformId, platforms]);
+
+  const allowedCommandsForPlatform = useMemo(() => {
+    // comandos disponíveis por plataforma (mesma regra do modal)
+    if (!selectedPlatformSlug) return ["Pedidos", "Cotações", "Produtos"] as const;
+    if (selectedPlatformSlug === "allpost") return ["Cotações", "Pedidos"] as const;
+    if (selectedPlatformSlug === "precode") return ["Pedidos", "Produtos"] as const;
+    if (selectedPlatformSlug === "tray") return ["Pedidos", "Produtos"] as const;
+    return ["Pedidos", "Cotações", "Produtos"] as const;
+  }, [selectedPlatformSlug]);
+
+  useEffect(() => {
+    if (!command) return;
+    if (!allowedCommandsForPlatform.includes(command as any)) setCommand("");
+  }, [allowedCommandsForPlatform, command]);
+
+  const submitRun = async () => {
+    setRunSubmitting(true);
+    setRunError(null);
+    try {
+      if (!runPlatform) throw new Error("platform inválido");
+      if (!runScript) throw new Error("script inválido");
+
+      const supportsDate = !(runScript === "products" || (runPlatform === "allpost" && runScript === "quotes"));
+      const supportsOnlyInsert = runScript === "orders" && (runPlatform === "tray" || runPlatform === "precode");
+      if (supportsDate) {
+        if (!runStartDate || !runEndDate) throw new Error("Informe start e end date");
+        if (runStartDate > maxSelectableYmd || runEndDate > maxSelectableYmd) throw new Error("Não é permitido selecionar datas no futuro");
+        const days = diffDaysInclusive(runStartDate, runEndDate);
+        if (days === null) throw new Error("Período inválido");
+        if (days > 31) throw new Error("O período máximo permitido é de 31 dias");
+      }
+
+      const body = {
+        platform: runPlatform,
+        script: runScript,
+        start_date: supportsDate ? runStartDate || null : null,
+        end_date: supportsDate ? runEndDate || null : null,
+        only_insert: supportsOnlyInsert ? runOnlyInsert || false : false,
+      };
+
+      const res = await fetch(buildApiUrl("/companies/me/integration-run"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+        body: JSON.stringify(body),
+      });
+      if (res.status === 401) throw new Error("Não autenticado");
+      const text = await res.text().catch(() => "");
+      if (!res.ok) throw new Error(text || "Falha ao iniciar comando");
+      setRunOpen(false);
+      await load();
+    } catch (e: any) {
+      setRunError(String(e?.message || "Falha ao iniciar comando"));
+    } finally {
+      setRunSubmitting(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!runOpen) return;
+    // defaults ao abrir o modal
+    // por padrão, deixa marcado apenas nos comandos de pedidos (tray/precode)
+    setRunOnlyInsert(runScript === "orders" && (runPlatform === "tray" || runPlatform === "precode"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runOpen]);
+
+  useEffect(() => {
+    // Se mudar para um comando que não suporta onlyInsert, desmarca.
+    const supportsOnlyInsert = runScript === "orders" && (runPlatform === "tray" || runPlatform === "precode");
+    if (!supportsOnlyInsert && runOnlyInsert) setRunOnlyInsert(false);
+  }, [runOnlyInsert, runPlatform, runScript]);
 
   return (
     <div className="space-y-4">
@@ -125,23 +260,15 @@ export default function LogIntegracoes() {
           <div className="text-2xl font-extrabold text-slate-900">Log de Integrações</div>
           <div className="text-sm text-slate-600">Execuções dos comandos (Pedidos, Cotações, Produtos) por empresa/plataforma.</div>
         </div>
+        <div className="flex gap-2">
+          <Button type="button" variant="outline" onClick={() => setRunOpen(true)}>
+            Forçar comando
+          </Button>
+        </div>
       </div>
 
       <Card className="border-slate-200 bg-white p-4">
         <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
-          <div>
-            <label className="block text-sm font-semibold text-slate-700 mb-1">Comando</label>
-            <select
-              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900 outline-none focus:ring-2 focus:ring-primary/30"
-              value={command}
-              onChange={(e) => setCommand(e.target.value)}
-            >
-              <option value="">Todos</option>
-              <option value="Pedidos">Pedidos</option>
-              <option value="Cotações">Cotações</option>
-              <option value="Produtos">Produtos</option>
-            </select>
-          </div>
           <div>
             <label className="block text-sm font-semibold text-slate-700 mb-1">Plataforma</label>
             <select
@@ -160,16 +287,55 @@ export default function LogIntegracoes() {
                 ))}
             </select>
           </div>
+          <div>
+            <label className="block text-sm font-semibold text-slate-700 mb-1">Comando</label>
+            <select
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900 outline-none focus:ring-2 focus:ring-primary/30"
+              value={command}
+              onChange={(e) => setCommand(e.target.value)}
+            >
+              <option value="">Todos</option>
+              {allowedCommandsForPlatform.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </div>
           <div className="md:col-span-2">
             <label className="block text-sm font-semibold text-slate-700 mb-1">Período do Registro</label>
-            <DateRangePicker value={periodoRegistro} onChange={setPeriodoRegistro} placeholder="Selecionar período..." />
+            <DateRangePicker
+              value={periodoRegistro}
+              onChange={setPeriodoRegistro}
+              placeholder="Selecionar período..."
+              max={maxSelectableYmd}
+              maxRangeDays={31}
+            />
           </div>
           <div>
             <label className="block text-sm font-semibold text-slate-700 mb-1">Data do Processamento</label>
-            <DatePicker value={processamentoDate} onChange={setProcessamentoDate} placeholder="Selecionar data..." />
+            <DatePicker value={processamentoDate} onChange={setProcessamentoDate} placeholder="Selecionar data..." max={maxSelectableYmd} />
           </div>
           <div className="flex items-end">
-            <Button type="button" variant="primary" onClick={() => load()} disabled={loading} className="w-full">
+            <Button
+              type="button"
+              variant="primary"
+              onClick={() => {
+                // validações: sem futuro e máximo 31 dias
+                const start = String(periodoRegistro.start || "").trim();
+                const end = String(periodoRegistro.end || "").trim();
+                if (start && start > maxSelectableYmd) return setError("Não é permitido selecionar datas no futuro");
+                if (end && end > maxSelectableYmd) return setError("Não é permitido selecionar datas no futuro");
+                if (start && end) {
+                  const days = diffDaysInclusive(start, end);
+                  if (days !== null && days > 31) return setError("O período máximo permitido é de 31 dias");
+                }
+                setError(null);
+                load();
+              }}
+              disabled={loading}
+              className="w-full"
+            >
               Aplicar filtros
             </Button>
           </div>
@@ -195,7 +361,8 @@ export default function LogIntegracoes() {
                 <th className="px-3 py-2 font-extrabold text-slate-700">Processado em</th>
                 <th className="px-3 py-2 font-extrabold text-slate-700">Plataforma</th>
                 <th className="px-3 py-2 font-extrabold text-slate-700">Comando</th>
-                <th className="px-3 py-2 font-extrabold text-slate-700">Data (filtro)</th>
+                <th className="px-3 py-2 font-extrabold text-slate-700">Status</th>
+                <th className="px-3 py-2 font-extrabold text-slate-700">Período</th>
                 <th className="px-3 py-2 font-extrabold text-slate-700">Resumo</th>
                 <th className="px-3 py-2 font-extrabold text-slate-700">Erros</th>
               </tr>
@@ -203,7 +370,7 @@ export default function LogIntegracoes() {
             <tbody>
               {data.items.length === 0 ? (
                 <tr>
-                  <td className="px-3 py-4 text-slate-600" colSpan={6}>
+                  <td className="px-3 py-4 text-slate-600" colSpan={7}>
                     {loading ? "Carregando..." : "Nenhum log encontrado."}
                   </td>
                 </tr>
@@ -225,13 +392,23 @@ export default function LogIntegracoes() {
                   })();
 
                   const filterDate = (() => {
+                    const l = r.log || {};
+                    const start = typeof l.startDate === "string" ? l.startDate.trim() : "";
+                    const end = typeof l.endDate === "string" ? l.endDate.trim() : "";
+                    const fmt = (raw: string) => {
+                      const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(raw));
+                      if (!m) return String(raw);
+                      return `${m[3]}/${m[2]}/${m[1]}`;
+                    };
+                    if (start && end) return `${fmt(start)} – ${fmt(end)}`;
+                    if (start) return fmt(start);
+                    if (end) return fmt(end);
+
                     const raw = r.date;
                     if (!raw) return "-";
                     // Aceita "YYYY-MM-DD" e também ISO datetime (ex.: "YYYY-MM-DDT00:00:00Z")
                     // Sempre formata como dd/mm/yyyy (sem hora) sem depender de timezone.
-                    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(raw));
-                    if (!m) return String(raw);
-                    return `${m[3]}/${m[2]}/${m[1]}`;
+                    return fmt(String(raw));
                   })();
 
                   const summary = (() => {
@@ -246,6 +423,18 @@ export default function LogIntegracoes() {
                       .join(" · ");
                   })();
 
+                  const statusLabel = (() => {
+                    if (r.status === "PROCESSANDO") return "Processando...";
+                    if (r.status === "ERRO") return "Erro";
+                    return "Finalizado";
+                  })();
+
+                  const statusClass = (() => {
+                    if (r.status === "PROCESSANDO") return "bg-amber-100 text-amber-900 border-amber-200";
+                    if (r.status === "ERRO") return "bg-red-100 text-red-900 border-red-200";
+                    return "bg-emerald-100 text-emerald-900 border-emerald-200";
+                  })();
+
                   return (
                     <tr key={r.id} className="border-t border-slate-100">
                       <td className="px-3 py-2 text-slate-900 whitespace-nowrap">{processedAt}</td>
@@ -256,6 +445,11 @@ export default function LogIntegracoes() {
                         </div>
                       </td>
                       <td className="px-3 py-2 text-slate-900 font-bold">{r.command}</td>
+                      <td className="px-3 py-2">
+                        <span className={"inline-flex items-center rounded-full border px-2 py-1 text-xs font-extrabold " + statusClass}>
+                          {statusLabel}
+                        </span>
+                      </td>
                       <td className="px-3 py-2 text-slate-700 whitespace-nowrap">{filterDate}</td>
                       <td className="px-3 py-2 text-slate-700">
                         <button
@@ -320,6 +514,99 @@ export default function LogIntegracoes() {
             </div>
           </div>
         )}
+      </SlideOver>
+
+      <SlideOver open={runOpen} title="Forçar comando" onClose={() => setRunOpen(false)}>
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 gap-3">
+            <div>
+              <label className="block text-sm font-semibold text-slate-700 mb-1">Plataforma</label>
+              <select
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900 outline-none focus:ring-2 focus:ring-primary/30"
+                value={runPlatform}
+                onChange={(e) => {
+                  const next = e.target.value as any;
+                  setRunPlatform(next);
+                  // defaults de script por plataforma
+                  if (next === "allpost") setRunScript("quotes");
+                  else setRunScript("orders");
+                }}
+              >
+                {platforms
+                  .slice()
+                  .sort((a, b) => String(a.name).localeCompare(String(b.name)))
+                  .map((p) => (
+                    <option key={p.id} value={p.slug}>
+                      {p.name} ({p.slug})
+                    </option>
+                  ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold text-slate-700 mb-1">Script</label>
+              <select
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900 outline-none focus:ring-2 focus:ring-primary/30"
+                value={runScript}
+                onChange={(e) => setRunScript(e.target.value)}
+              >
+                {runPlatform === "tray" ? (
+                  <>
+                    <option value="orders">Pedidos</option>
+                    <option value="products">Produtos</option>
+                  </>
+                ) : null}
+                {runPlatform === "precode" ? (
+                  <>
+                    <option value="orders">Pedidos</option>
+                    <option value="products">Produtos</option>
+                  </>
+                ) : null}
+                {runPlatform === "allpost" ? (
+                  <>
+                    <option value="quotes">Orçamentos</option>
+                    <option value="orders">Pedidos</option>
+                  </>
+                ) : null}
+              </select>
+            </div>
+
+            {!(runScript === "products" || (runPlatform === "allpost" && runScript === "quotes")) ? (
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-1">Start date</label>
+                  <DatePicker value={runStartDate} onChange={setRunStartDate} placeholder="YYYY-MM-DD" max={maxSelectableYmd} />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-1">End date</label>
+                  <DatePicker value={runEndDate} onChange={setRunEndDate} placeholder="YYYY-MM-DD" max={maxSelectableYmd} />
+                </div>
+              </div>
+            ) : null}
+
+            {runScript === "orders" && (runPlatform === "tray" || runPlatform === "precode") ? (
+              <label className="flex items-center gap-2 text-sm text-slate-800">
+                <input type="checkbox" checked={runOnlyInsert} onChange={(e) => setRunOnlyInsert(e.target.checked)} />
+                Apenas insere o que não existir
+              </label>
+            ) : null}
+          </div>
+
+          {runError ? <div className="text-sm text-red-600">{runError}</div> : null}
+
+          <div className="flex gap-2">
+            <Button type="button" variant="outline" onClick={() => setRunOpen(false)} disabled={runSubmitting}>
+              Cancelar
+            </Button>
+            <Button type="button" variant="primary" onClick={submitRun} disabled={runSubmitting}>
+              {runSubmitting ? "Iniciando..." : "Iniciar"}
+            </Button>
+          </div>
+
+          <div className="text-xs text-slate-600">
+            Este comando é assíncrono: o sistema retorna “script iniciado” e a execução continua em background.
+          </div>
+        </div>
       </SlideOver>
     </div>
   );

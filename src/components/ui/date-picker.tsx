@@ -8,6 +8,8 @@ type Props = {
   onChange: (next: string) => void;
   placeholder?: string;
   disabled?: boolean;
+  min?: string; // YYYY-MM-DD (inclusive)
+  max?: string; // YYYY-MM-DD (inclusive)
 };
 
 function pad2(n: number) {
@@ -68,7 +70,7 @@ function formatMonthYearPT(d: Date): string {
   return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
 }
 
-export function DatePicker({ label, value, onChange, placeholder = "Selecionar data...", disabled }: Props) {
+export function DatePicker({ label, value, onChange, placeholder = "Selecionar data...", disabled, min, max }: Props) {
   const [open, setOpen] = useState(false);
   const [month, setMonth] = useState<Date>(() => startOfMonthDate(new Date()));
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -140,6 +142,8 @@ export function DatePicker({ label, value, onChange, placeholder = "Selecionar d
 
   const grid = useMemo(() => monthGrid(month), [month]);
   const selected = fromISODate(value);
+  const minDt = useMemo(() => fromISODate(min || ""), [min]);
+  const maxDt = useMemo(() => fromISODate(max || ""), [max]);
 
   const panel =
     !open || !panelStyle
@@ -181,11 +185,16 @@ export function DatePicker({ label, value, onChange, placeholder = "Selecionar d
                 {grid.map((day) => {
                   const isCurrentMonth = day.getMonth() === month.getMonth();
                   const isSel = selected ? isSameDay(day, selected) : false;
+                  const isBeforeMin = minDt ? day.getTime() < minDt.getTime() : false;
+                  const isAfterMax = maxDt ? day.getTime() > maxDt.getTime() : false;
+                  const isBlocked = isBeforeMin || isAfterMax;
                   return (
                     <button
                       key={day.toISOString()}
                       type="button"
+                      disabled={disabled || isBlocked}
                       onClick={() => {
+                        if (isBlocked || disabled) return;
                         onChange(toISODate(day));
                         setOpen(false);
                       }}
@@ -193,9 +202,11 @@ export function DatePicker({ label, value, onChange, placeholder = "Selecionar d
                         "h-9 rounded-lg text-sm font-semibold transition-colors " +
                         (isSel
                           ? "bg-primary text-white"
-                          : isCurrentMonth
-                            ? "text-slate-900 hover:bg-slate-100"
-                            : "text-slate-400 hover:bg-slate-100")
+                          : isBlocked
+                            ? "text-slate-300 cursor-not-allowed"
+                            : isCurrentMonth
+                              ? "text-slate-900 hover:bg-slate-100"
+                              : "text-slate-400 hover:bg-slate-100")
                       }
                     >
                       {day.getDate()}
@@ -216,7 +227,14 @@ export function DatePicker({ label, value, onChange, placeholder = "Selecionar d
                   type="button"
                   className="rounded-lg px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-100"
                   onClick={() => {
-                    onChange(toISODate(new Date()));
+                    const today = new Date();
+                    const candidate = toISODate(today);
+                    const maxOk = max && /^\d{4}-\d{2}-\d{2}$/.test(max) ? max : null;
+                    const minOk = min && /^\d{4}-\d{2}-\d{2}$/.test(min) ? min : null;
+                    // respeita max/min se existirem
+                    if (maxOk && candidate > maxOk) onChange(maxOk);
+                    else if (minOk && candidate < minOk) onChange(minOk);
+                    else onChange(candidate);
                     setOpen(false);
                   }}
                 >
