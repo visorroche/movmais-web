@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { buildApiUrl } from "@/lib/config";
-import { getAuthHeaders } from "@/lib/auth";
+import { getAuthHeaders, throwIfUnauthorized } from "@/lib/auth";
 import { DateRangePicker, type DateRangeValue } from "@/components/ui/date-range-picker";
 import { marketplaceColorOrFallback, marketplaceTextColor } from "@/lib/marketplaceColors";
 import { SlideOver } from "@/components/ui/slideover";
@@ -73,7 +73,7 @@ const DashboardOperacao = () => {
     setFiltersError(null);
     fetch(buildApiUrl("/companies/me/dashboard/filters"), { headers: { ...getAuthHeaders() }, signal: ac.signal })
       .then(async (res) => {
-        if (res.status === 401) throw new Error("Não autenticado");
+        throwIfUnauthorized(res);
         if (!res.ok) {
           const d = await res.json().catch(() => ({}));
           throw new Error((d as any)?.message || "Erro ao carregar filtros");

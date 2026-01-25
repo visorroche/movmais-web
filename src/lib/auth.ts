@@ -36,6 +36,27 @@ export function clearToken() {
   localStorage.removeItem(ACTIVE_COMPANY_KEY);
 }
 
+export function redirectToLogin() {
+  // evita ficar preso em estado inválido (token expirado/inválido)
+  clearToken();
+  // guarda onde o usuário estava (opcional)
+  try {
+    const path = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (path && path !== "/login") localStorage.setItem("movmais_after_login", path);
+  } catch {}
+  window.location.href = "/login";
+}
+
+export function handleUnauthorized(): never {
+  redirectToLogin();
+  // garante que o fluxo atual para imediatamente (mesmo antes do redirect efetivar)
+  throw new Error("Não autenticado");
+}
+
+export function throwIfUnauthorized(res: Response) {
+  if (res.status === 401) handleUnauthorized();
+}
+
 export function getActiveCompanyId(): number | null {
   try {
     const raw = localStorage.getItem(ACTIVE_COMPANY_KEY);
@@ -85,7 +106,7 @@ export async function login(email: string, password: string): Promise<string> {
 
 export async function fetchMyCompanies(signal?: AbortSignal): Promise<CompanyAccess[]> {
   const res = await fetch(buildApiUrl("/companies/my"), { headers: { ...getAuthHeaders() }, signal });
-  if (res.status === 401) throw new Error("Não autenticado");
+  throwIfUnauthorized(res);
   if (!res.ok) throw new Error("Erro ao carregar empresas");
   const data = (await res.json()) as unknown;
   return Array.isArray(data) ? (data as CompanyAccess[]) : [];
@@ -105,7 +126,7 @@ export async function ensureDefaultCompanySelected(signal?: AbortSignal): Promis
 
 export async function getMe(signal?: AbortSignal): Promise<UserMe> {
   const res = await fetch(buildApiUrl("/users/me"), { headers: { ...getAuthHeaders() }, signal });
-  if (res.status === 401) throw new Error("Não autenticado");
+  throwIfUnauthorized(res);
   if (!res.ok) throw new Error("Erro ao carregar usuário");
   return res.json();
 }

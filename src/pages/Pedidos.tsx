@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { buildApiUrl } from "@/lib/config";
-import { getAuthHeaders } from "@/lib/auth";
+import { getAuthHeaders, throwIfUnauthorized } from "@/lib/auth";
 import { Search } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { OrderDetailSlideOver } from "@/components/orders/OrderDetailSlideOver";
@@ -115,7 +115,7 @@ const Pedidos = () => {
       signal: ac.signal,
     })
       .then(async (res) => {
-        if (res.status === 401) throw new Error("Não autenticado");
+        throwIfUnauthorized(res);
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
           throw new Error((data as any)?.message || "Erro ao carregar pedidos");

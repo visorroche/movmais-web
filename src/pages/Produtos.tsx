@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { buildApiUrl } from "@/lib/config";
-import { getAuthHeaders } from "@/lib/auth";
+import { getAuthHeaders, throwIfUnauthorized } from "@/lib/auth";
 import { Bot, Pencil, Search, Store } from "lucide-react";
 import { ProductThumb } from "@/components/products/ProductThumb";
 import { ProductDetailSlideOver } from "@/components/products/ProductDetailSlideOver";
@@ -108,7 +108,7 @@ const Produtos = () => {
         signal: ac.signal,
       })
         .then(async (res) => {
-          if (res.status === 401) throw new Error("Não autenticado");
+          throwIfUnauthorized(res);
           if (!res.ok) {
             const data = await res.json().catch(() => ({}));
             throw new Error((data as any)?.message || "Erro ao carregar produtos");
@@ -212,7 +212,7 @@ const Produtos = () => {
     setDistinctError(null);
     fetch(buildApiUrl(`/companies/me/products/distinct-values`), { headers: { ...getAuthHeaders() }, signal: ac.signal })
       .then(async (res) => {
-        if (res.status === 401) throw new Error("Não autenticado");
+        throwIfUnauthorized(res);
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
           throw new Error((data as any)?.message || "Erro ao carregar opções");
@@ -263,7 +263,7 @@ const Produtos = () => {
         headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify({ ids: selectedIds, fields, lock: true }),
       });
-      if (resp.status === 401) throw new Error("Não autenticado");
+      throwIfUnauthorized(resp);
       if (!resp.ok) {
         const data = await resp.json().catch(() => ({}));
         throw new Error((data as any)?.message || "Erro ao salvar alterações");
@@ -289,7 +289,7 @@ const Produtos = () => {
         headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify({ ids: selectedIds }),
       });
-      if (resp.status === 401) throw new Error("Não autenticado");
+      throwIfUnauthorized(resp);
       if (!resp.ok) {
         const data = await resp.json().catch(() => ({}));
         throw new Error((data as any)?.message || "Erro ao classificar com IA");

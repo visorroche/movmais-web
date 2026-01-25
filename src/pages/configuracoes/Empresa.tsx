@@ -7,6 +7,7 @@ import {
   fetchMyCompanies,
   getActiveCompanyId,
   getAuthHeaders,
+  throwIfUnauthorized,
   logout,
   setActiveCompanyId,
   type CompanyAccess,
@@ -129,7 +130,7 @@ const ConfigEmpresa = () => {
         headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify({ name, site }),
       });
-      if (res.status === 401) throw new Error("Não autenticado");
+      throwIfUnauthorized(res);
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error((data as any)?.message || "Erro ao salvar empresa");
@@ -159,7 +160,7 @@ const ConfigEmpresa = () => {
         headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify({ name }),
       });
-      if (res.status === 401) throw new Error("Não autenticado");
+      throwIfUnauthorized(res);
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error((data as any)?.message || "Erro ao criar grupo");
@@ -171,6 +172,7 @@ const ConfigEmpresa = () => {
         headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify({ group_id: created.id }),
       });
+      throwIfUnauthorized(link);
       if (!link.ok) {
         const data = await link.json().catch(() => ({}));
         throw new Error((data as any)?.message || "Grupo criado, mas falhou ao vincular na empresa");
@@ -205,7 +207,7 @@ const ConfigEmpresa = () => {
         headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify({ name }),
       });
-      if (res.status === 401) throw new Error("Não autenticado");
+      throwIfUnauthorized(res);
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error((data as any)?.message || "Erro ao salvar grupo");
@@ -230,7 +232,7 @@ const ConfigEmpresa = () => {
         headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify({ confirm_name: confirmClearName }),
       });
-      if (res.status === 401) throw new Error("Não autenticado");
+      throwIfUnauthorized(res);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error((data as any)?.message || "Erro ao apagar dados");
       toast({
@@ -256,7 +258,7 @@ const ConfigEmpresa = () => {
         headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify({ confirm_name: confirmDeleteName }),
       });
-      if (res.status === 401) throw new Error("Não autenticado");
+      throwIfUnauthorized(res);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error((data as any)?.message || "Erro ao deletar empresa");
 

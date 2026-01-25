@@ -5,7 +5,7 @@ import type { AreaLogadaOutletContext } from "@/pages/AreaLogada";
 import { ResponsiveLine } from "@nivo/line";
 import { ResponsiveBar } from "@nivo/bar";
 import { buildApiUrl } from "@/lib/config";
-import { getAuthHeaders } from "@/lib/auth";
+import { getAuthHeaders, throwIfUnauthorized } from "@/lib/auth";
 import { MultiSelect, type MultiSelectOption } from "@/components/ui/multi-select";
 import { DateRangePicker, type DateRangeValue } from "@/components/ui/date-range-picker";
 import { SlideOver } from "@/components/ui/slideover";
@@ -372,7 +372,7 @@ const Dashboard = () => {
         signal: ac.signal,
         },
       ).then(async (res) => {
-        if (res.status === 401) throw new Error("Não autenticado");
+        throwIfUnauthorized(res);
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
           throw new Error((data as any)?.message || "Erro ao carregar faturamento");
@@ -386,7 +386,7 @@ const Dashboard = () => {
         signal: ac.signal,
         },
       ).then(async (res) => {
-        if (res.status === 401) throw new Error("Não autenticado");
+        throwIfUnauthorized(res);
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
           throw new Error((data as any)?.message || "Erro ao carregar faturamento (comparativo)");
@@ -402,7 +402,7 @@ const Dashboard = () => {
             headers: { ...getAuthHeaders() },
             signal: ac.signal,
           }).then(async (res) => {
-            if (res.status === 401) throw new Error("Não autenticado");
+            throwIfUnauthorized(res);
             if (!res.ok) {
               const data = await res.json().catch(() => ({}));
               throw new Error((data as any)?.message || "Erro ao carregar operação");
@@ -545,7 +545,7 @@ const Dashboard = () => {
     setFiltersError(null);
     fetch(buildApiUrl("/companies/me/dashboard/filters"), { headers: { ...getAuthHeaders() }, signal: ac.signal })
       .then(async (res) => {
-        if (res.status === 401) throw new Error("Não autenticado");
+        throwIfUnauthorized(res);
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
           throw new Error((data as any)?.message || "Erro ao carregar filtros");
@@ -623,7 +623,7 @@ const Dashboard = () => {
         signal: ac.signal,
       })
         .then(async (res) => {
-          if (res.status === 401) throw new Error("Não autenticado");
+          throwIfUnauthorized(res);
           if (!res.ok) {
             const data = await res.json().catch(() => ({}));
             throw new Error((data as any)?.message || "Erro ao buscar produtos");
@@ -663,7 +663,7 @@ const Dashboard = () => {
       signal: ac.signal,
     })
       .then(async (res) => {
-        if (res.status === 401) throw new Error("Não autenticado");
+        throwIfUnauthorized(res);
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
           throw new Error((data as any)?.message || "Erro ao carregar cidades");

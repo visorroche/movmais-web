@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { buildApiUrl } from "@/lib/config";
-import { getAuthHeaders } from "@/lib/auth";
+import { getAuthHeaders, throwIfUnauthorized } from "@/lib/auth";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { DateRangePicker, type DateRangeValue } from "@/components/ui/date-range-picker";
@@ -32,6 +32,8 @@ type CompanyPlatform = {
   config: any;
   platform: Platform | null;
 };
+
+type SortKey = "processed_at" | "period";
 
 function toQuery(params: Record<string, string | number | null | undefined>): string {
   const qs = new URLSearchParams();
@@ -79,6 +81,9 @@ export default function LogIntegracoes() {
   const [periodoRegistro, setPeriodoRegistro] = useState<DateRangeValue>({ start: "", end: "" });
   const [processamentoDate, setProcessamentoDate] = useState<string>(() => todayYmd());
 
+  const [sortKey, setSortKey] = useState<SortKey>("processed_at");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailRow, setDetailRow] = useState<ApiLogRow | null>(null);
 
@@ -118,6 +123,14 @@ export default function LogIntegracoes() {
 
   const maxSelectableYmd = useMemo(() => todayYmd(), []);
 
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else {
+      setSortKey(key);
+      setSortDir("desc");
+    }
+  };
+
   const load = async (signal?: AbortSignal) => {
     setLoading(true);
     setError(null);
@@ -127,7 +140,7 @@ export default function LogIntegracoes() {
         signal,
         cache: "no-store",
       });
-      if (res.status === 401) throw new Error("Não autenticado");
+      throwIfUnauthorized(res);
       if (!res.ok) throw new Error("Erro ao carregar logs");
       const json = (await res.json()) as ApiResponse;
       setData({ total: Number(json?.total ?? 0) || 0, items: Array.isArray(json?.items) ? json.items : [] });
@@ -197,6 +210,59 @@ export default function LogIntegracoes() {
     if (!allowedCommandsForPlatform.includes(command as any)) setCommand("");
   }, [allowedCommandsForPlatform, command]);
 
+  const sortedItems = useMemo(() => {
+    const dir = sortDir === "asc" ? 1 : -1;
+    const items = Array.isArray(data.items) ? data.items.slice() : [];
+
+    const periodKey = (r: ApiLogRow) => {
+      const l = r.log || {};
+      const start = typeof l.startDate === "string" ? l.startDate.trim() : "";
+      const end = typeof l.endDate === "string" ? l.endDate.trim() : "";
+      const startKey = start || end || (r.date ? String(r.date) : "");
+      const endKey = end || start || (r.date ? String(r.date) : "");
+      return { startKey, endKey };
+    };
+
+    const cmpStr = (a: string, b: string) => {
+      const aa = String(a || "").trim();
+      const bb = String(b || "").trim();
+      const aHas = Boolean(aa);
+      const bHas = Boolean(bb);
+      if (aHas !== bHas) return aHas ? -1 : 1; // vazios sempre por último
+      if (!aHas && !bHas) return 0;
+      // "YYYY-MM-DD" ordena bem como string; para ISO também mantém.
+      return aa.localeCompare(bb);
+    };
+
+    const cmpNum = (a: number, b: number) => {
+      const aOk = Number.isFinite(a);
+      const bOk = Number.isFinite(b);
+      if (aOk !== bOk) return aOk ? -1 : 1; // inválidos sempre por último
+      if (!aOk && !bOk) return 0;
+      return a === b ? 0 : a < b ? -1 : 1;
+    };
+
+    items.sort((a, b) => {
+      if (sortKey === "period") {
+        const pa = periodKey(a);
+        const pb = periodKey(b);
+        const c1 = cmpStr(pa.startKey, pb.startKey);
+        if (c1) return c1 * dir;
+        const c2 = cmpStr(pa.endKey, pb.endKey);
+        if (c2) return c2 * dir;
+      } else {
+        const ta = Date.parse(String(a.processed_at || ""));
+        const tb = Date.parse(String(b.processed_at || ""));
+        const c1 = cmpNum(ta, tb);
+        if (c1) return c1 * dir;
+      }
+      // fallback determinístico
+      return cmpNum(Number(a.id), Number(b.id)) * dir;
+    });
+
+    return items;
+  }, [data.items, sortDir, sortKey]);
+
   const submitRun = async () => {
     setRunSubmitting(true);
     setRunError(null);
@@ -227,7 +293,7 @@ export default function LogIntegracoes() {
         headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify(body),
       });
-      if (res.status === 401) throw new Error("Não autenticado");
+      throwIfUnauthorized(res);
       const text = await res.text().catch(() => "");
       if (!res.ok) throw new Error(text || "Falha ao iniciar comando");
       setRunOpen(false);
@@ -358,24 +424,44 @@ export default function LogIntegracoes() {
           <table className="min-w-[920px] w-full text-sm">
             <thead className="bg-slate-50">
               <tr className="text-left">
-                <th className="px-3 py-2 font-extrabold text-slate-700">Processado em</th>
+                <th className="px-3 py-2 font-extrabold text-slate-700">
+                  <button
+                    type="button"
+                    onClick={() => toggleSort("processed_at")}
+                    className="inline-flex items-center gap-2 hover:underline"
+                    title="Ordenar por Processado em"
+                  >
+                    <span>Processado em</span>
+                    {sortKey === "processed_at" ? <span className="text-[10px]">{sortDir === "asc" ? "▲" : "▼"}</span> : null}
+                  </button>
+                </th>
                 <th className="px-3 py-2 font-extrabold text-slate-700">Plataforma</th>
                 <th className="px-3 py-2 font-extrabold text-slate-700">Comando</th>
                 <th className="px-3 py-2 font-extrabold text-slate-700">Status</th>
-                <th className="px-3 py-2 font-extrabold text-slate-700">Período</th>
+                <th className="px-3 py-2 font-extrabold text-slate-700">
+                  <button
+                    type="button"
+                    onClick={() => toggleSort("period")}
+                    className="inline-flex items-center gap-2 hover:underline"
+                    title="Ordenar por Período"
+                  >
+                    <span>Período</span>
+                    {sortKey === "period" ? <span className="text-[10px]">{sortDir === "asc" ? "▲" : "▼"}</span> : null}
+                  </button>
+                </th>
                 <th className="px-3 py-2 font-extrabold text-slate-700">Resumo</th>
                 <th className="px-3 py-2 font-extrabold text-slate-700">Erros</th>
               </tr>
             </thead>
             <tbody>
-              {data.items.length === 0 ? (
+              {sortedItems.length === 0 ? (
                 <tr>
                   <td className="px-3 py-4 text-slate-600" colSpan={7}>
                     {loading ? "Carregando..." : "Nenhum log encontrado."}
                   </td>
                 </tr>
               ) : (
-                data.items.map((r) => {
+                sortedItems.map((r) => {
                   const processedAt = (() => {
                     const dt = new Date(r.processed_at);
                     if (Number.isNaN(dt.getTime())) return r.processed_at;

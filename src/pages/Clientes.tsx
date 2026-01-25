@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { buildApiUrl } from "@/lib/config";
-import { getAuthHeaders } from "@/lib/auth";
+import { getAuthHeaders, throwIfUnauthorized } from "@/lib/auth";
 import { Search } from "lucide-react";
 import { SlideOver } from "@/components/ui/slideover";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -132,7 +132,7 @@ const Clientes = () => {
         signal: ac.signal,
       })
         .then(async (res) => {
-          if (res.status === 401) throw new Error("Não autenticado");
+          throwIfUnauthorized(res);
           if (!res.ok) {
             const data = await res.json().catch(() => ({}));
             throw new Error((data as any)?.message || "Erro ao carregar clientes");
@@ -167,7 +167,7 @@ const Clientes = () => {
     setDetailError(null);
     fetch(buildApiUrl(`/companies/me/customers/${selectedId}`), { headers: { ...getAuthHeaders() }, signal: ac.signal })
       .then(async (res) => {
-        if (res.status === 401) throw new Error("Não autenticado");
+        throwIfUnauthorized(res);
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
           throw new Error((data as any)?.message || "Erro ao carregar detalhes");
@@ -204,7 +204,7 @@ const Clientes = () => {
       signal: ac.signal,
     })
       .then(async (res) => {
-        if (res.status === 401) throw new Error("Não autenticado");
+        throwIfUnauthorized(res);
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
           throw new Error((data as any)?.message || "Erro ao carregar pedidos do cliente");

@@ -3,7 +3,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { buildApiUrl } from "@/lib/config";
-import { getAuthHeaders } from "@/lib/auth";
+import { getAuthHeaders, throwIfUnauthorized } from "@/lib/auth";
 import { useToast } from "@/components/ui/use-toast";
 import { Pencil, Trash2 } from "lucide-react";
 
@@ -38,7 +38,7 @@ const ConfigUsuarios = () => {
     setLoading(true);
     try {
       const res = await fetch(buildApiUrl("/companies/me/users"), { headers: { ...getAuthHeaders() } });
-      if (res.status === 401) throw new Error("Não autenticado");
+      throwIfUnauthorized(res);
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error((data as any)?.message || "Erro ao carregar usuários");
@@ -99,7 +99,7 @@ const ConfigUsuarios = () => {
         headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify(body),
       });
-      if (res.status === 401) throw new Error("Não autenticado");
+      throwIfUnauthorized(res);
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error((data as any)?.message || "Erro ao salvar usuário");
@@ -127,7 +127,7 @@ const ConfigUsuarios = () => {
         method: "DELETE",
         headers: { ...getAuthHeaders() },
       });
-      if (res.status === 401) throw new Error("Não autenticado");
+      throwIfUnauthorized(res);
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error((data as any)?.message || "Erro ao remover usuário");

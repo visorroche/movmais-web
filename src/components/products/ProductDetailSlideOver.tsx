@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { SlideOver } from "@/components/ui/slideover";
 import { buildApiUrl } from "@/lib/config";
-import { getAuthHeaders } from "@/lib/auth";
+import { getAuthHeaders, throwIfUnauthorized } from "@/lib/auth";
 import { ProductThumb } from "./ProductThumb";
 
 type ProductDetail = {
@@ -59,7 +59,7 @@ export function ProductDetailSlideOver({ open, productId, onClose }: Props) {
 
     fetch(buildApiUrl(`/companies/me/products/${productId}`), { headers: { ...getAuthHeaders() }, signal: ac.signal })
       .then(async (res) => {
-        if (res.status === 401) throw new Error("Não autenticado");
+        throwIfUnauthorized(res);
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
           throw new Error((data as any)?.message || "Erro ao carregar detalhes");
