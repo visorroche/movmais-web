@@ -499,11 +499,24 @@ export default function LogIntegracoes() {
 
                   const summary = (() => {
                     const l = r.log || {};
-                    const inserted = l.inserted ?? l.upserted ?? l.orders_processed ?? null;
-                    const fetched = l.fetched ?? l.processed ?? null;
+                    const inserted = l.inserted ?? null;
+                    const upserted = l.upserted ?? null;
+                    const updated = l.updated ?? l.orders_updated ?? l.orders_updated_status ?? null;
+                    const ordersProcessed = l.orders_processed ?? null;
+                    const customersCreated = l.customers_created ?? null;
+                    const orderDatesBackfilled = l.order_dates_backfilled ?? null;
+                    const fetched = l.fetched ?? null;
+                    const processed = l.processed ?? null;
                     return [
-                      inserted !== null ? `insert/upsert=${inserted}` : null,
-                      fetched !== null ? `fetched/processed=${fetched}` : null,
+                      inserted !== null || upserted !== null
+                        ? `inseridos=${Number(inserted ?? 0) || 0} · upsert=${Number(upserted ?? 0) || 0}`
+                        : null,
+                      updated !== null ? `atualizados=${Number(updated ?? 0) || 0}` : null,
+                      orderDatesBackfilled !== null ? `order_date_preenchido=${Number(orderDatesBackfilled ?? 0) || 0}` : null,
+                      ordersProcessed !== null ? `processados=${Number(ordersProcessed ?? 0) || 0}` : null,
+                      customersCreated !== null ? `clientes_novos=${Number(customersCreated ?? 0) || 0}` : null,
+                      fetched !== null ? `fetched=${Number(fetched ?? 0) || 0}` : null,
+                      processed !== null ? `processed=${Number(processed ?? 0) || 0}` : null,
                     ]
                       .filter(Boolean)
                       .join(" · ");
